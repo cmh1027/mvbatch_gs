@@ -21,7 +21,7 @@ from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
 from utils.reloc_utils import compute_relocation_cuda
-import warnings
+
 class GaussianModel:
 
     def setup_functions(self):
@@ -479,27 +479,29 @@ class GaussianModel:
 
         self.replace_tensors_to_optimizer(inds=reinit_idx) 
         
-    def add_new_gs(self, opt, cap_max, aux_grad=None, iteration=None):
+    def add_new_gs(self, cap_max, aux_grad=None, add_ratio=0.05, iteration=None):
         current_num_points = self._opacity.shape[0]
-
-        target_num = min(cap_max, int((1+opt.add_ratio) * current_num_points))
-        num_gs = max(0, target_num - current_num_points)
+        if aux_grad is None:
+            target_num = min(cap_max, int((1+add_ratio) * current_num_points))
+            num_gs = max(0, target_num - current_num_points)
+        else:
+            add_ratio_ = add_ratio
+            min_ratio = 0.1
+            add_ratio = add_ratio * min_ratio + max(0, (1 - (iteration / 10000))) * add_ratio * (1 - min_ratio)
+            aux_add_ratio = add_ratio_ - add_ratio
+            target_num = min(cap_max, int((1+add_ratio) * current_num_points))
+            aux_target_num = min(cap_max, int((1+aux_add_ratio) * current_num_points))
+            num_gs = max(0, target_num - current_num_points)
+            aux_num_gs = max(0, aux_target_num - current_num_points)
 
         if num_gs <= 0:
             return 0
 
-        probs = self.get_opacity.squeeze(-1).clone()
-        if opt.aux_densify:
-            probs[aux_grad < opt.aux_densify_threshold] = 0.
-            while probs.sum() == 0:
-                opt.aux_densify_threshold *= 2
-                print(f"All the probs are nullified. Double opt.aux_densify_threshold to {opt.aux_densify_threshold}")
-                probs = self.get_opacity.squeeze(-1).clone()
-                probs[aux_grad < opt.aux_densify_threshold] = 0.
-                
+        probs = self.get_opacity.squeeze(-1) 
         probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
 
         add_idx, ratio = self._sample_alives(probs=probs, num=num_gs)
+
 
         (
             new_xyz, 

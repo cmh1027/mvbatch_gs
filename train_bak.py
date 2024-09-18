@@ -64,11 +64,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         else:
             opt.batch_size = min(opt.batch_size, len(scene.getTrainCameras()))
         print(f"BATCH SIZE : {opt.batch_size}")
+
     if opt.batch_rays:
         dummy_cam = scene.getTrainCameras()[0]
         pmask = torch.zeros(dummy_cam.image_height*dummy_cam.image_width, dtype=torch.int32, device=torch.device('cuda'))
         n_rays = (dummy_cam.image_height * dummy_cam.image_width) // opt.batch_size
-    visibility_count_list = [] # for logging
+
     for iteration in range(first_iter, opt.iterations + 1):        
         xyz_lr = gaussians.update_learning_rate(iteration)
 
@@ -85,7 +86,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         cam_idx = viewpoint_stack.pop()
 
         if opt.batch_ray_type == "grid" and opt.batch_size > 1:
-            if (iteration-1) % 1000 == 0:
+            if (iteration-1) % opt.batch_decrease_step == 0:
                 if iteration > 1 and opt.batch_decrease:
                     opt.batch_size = max(1, opt.batch_size // 2)
                     print(f"BATCH SIZE : {opt.batch_size} / SIDE LENGTH : {side_length}")
@@ -97,6 +98,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             
         if iteration > opt.batch_until or opt.batch_type == "none":
             cam_idxs = [cam_idx]
+        elif opt.batch_type == "same":
+            cam_idxs = [cam_idx] * opt.batch_size
         elif opt.batch_type == "window":
             window = (opt.batch_size - 1) // 2
             cam_idxs = range(max(0, cam_idx-window), min(len(viewpoints), cam_idx+window+1))
@@ -113,20 +116,24 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         for idx, viewpoint_cam in enumerate(cams):
             bg = torch.rand((3), device="cuda") if opt.random_background else background
             if opt.batch_rays:
-                if len(cams) > 1 and opt.batch_partition:
+                if opt.batch_partition and opt.batch_size > 1:
                     pmask[:] = 0
                     if opt.batch_ray_type == "random":
                         pmask[torch.randperm(len(pmask), device=torch.device('cuda'))[:n_rays]] = 1
                     elif opt.batch_ray_type == "grid":
                         pmask = pmask.view(dummy_cam.image_height, dummy_cam.image_width)
-                        pmask[random.randrange(height_space+1)::height_stride, random.randrange(width_space+1)::width_stride] = 1
+                        if opt.grid_ray_fix:
+                            height_start, width_start = 0, 0
+                        else:
+                            height_start, width_start = random.randrange(height_space+1), random.randrange(width_space+1)
+                        pmask[height_start::height_stride, width_start::width_stride] = 1
                         pmask = pmask.flatten()
                     else:
                         raise NotImplementedError
                 else:
                     pmask[:] = 1
             else:
-                if len(cams) > 1 and opt.batch_partition:
+                if opt.batch_partition:
                     h_start = random.randrange(0, viewpoint_cam.image_height+1 - viewpoint_cam.image_height//patch_size)
                     h_end = h_start + viewpoint_cam.image_height//patch_size
                     w_start = random.randrange(0, viewpoint_cam.image_width+1 - viewpoint_cam.image_width//patch_size)
@@ -169,9 +176,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 loss += (E_u.detach() * R_u).sum()
                 if lambda_dssim > 0:
                     loss += (ssim_loss.detach() * R_u).sum()
+
             if not opt.single_reg:
                 loss += args.opacity_reg * torch.abs(gaussians.get_opacity).mean() 
                 loss += args.scale_reg * torch.abs(gaussians.get_scaling).mean() 
+                
             loss.backward()
 
         if opt.batch_grad_mean:
@@ -183,18 +192,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             aux_densify_grad = new_aux_densify_grad if aux_densify_grad is None else torch.max(aux_densify_grad, new_aux_densify_grad)
             gaussians._aux_scalar.grad = None
 
-        
-        
         if opt.single_reg:
             reg_loss = 0
             reg_loss += args.opacity_reg * torch.abs(gaussians.get_opacity).mean() 
             reg_loss += args.scale_reg * torch.abs(gaussians.get_scaling).mean() 
             reg_loss.backward()
-        
-        if opt.batch_type != "none" and iteration <= opt.batch_until and opt.batch_ray_type != "grid":
-            visibility_count_list.append(visibility_count.bincount(minlength=opt.batch_size+1))
-            if iteration % 1000 == 0:
-                torch.save(torch.stack(visibility_count_list), os.path.join(dataset.model_path, f"visibility.pt"))
         
         with torch.no_grad():
             # Progress bar
@@ -218,11 +220,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.densify_until_iter and iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                 dead_mask = (gaussians.get_opacity <= 0.005).squeeze(-1)
                 gaussians.relocate_gs(dead_mask=dead_mask)
-                if aux_densify:
-                    add_ratio = opt.add_ratio if opt.add_ratio > 0 else 0.05
-                else:
-                    add_ratio = 0.05
-                gaussians.add_new_gs(cap_max=args.cap_max, aux_grad=aux_densify_grad, add_ratio=add_ratio, iteration=iteration)
+                gaussians.add_new_gs(opt, cap_max=args.cap_max, aux_grad=aux_densify_grad, iteration=iteration)
                 aux_densify_grad = None
 
             if iteration % 200 == 0 and len(gt_images) > 1 and dataset.log_batch:
