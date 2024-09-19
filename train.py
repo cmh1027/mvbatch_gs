@@ -64,11 +64,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         else:
             opt.batch_size = min(opt.batch_size, len(scene.getTrainCameras()))
         print(f"BATCH SIZE : {opt.batch_size}")
+
     if opt.batch_rays:
         dummy_cam = scene.getTrainCameras()[0]
         pmask = torch.zeros(dummy_cam.image_height*dummy_cam.image_width, dtype=torch.int32, device=torch.device('cuda'))
         n_rays = (dummy_cam.image_height * dummy_cam.image_width) // opt.batch_size
-    visibility_count_list = [] # for logging
+        side_length = int(((dummy_cam.image_height * dummy_cam.image_width) // opt.batch_size) ** (1/2))
+
+
     for iteration in range(first_iter, opt.iterations + 1):        
         xyz_lr = gaussians.update_learning_rate(iteration)
 
@@ -84,16 +87,21 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         cam_idx = viewpoint_stack.pop()
 
-        if opt.batch_ray_type == "grid" and opt.batch_size > 1:
-            if (iteration-1) % 1000 == 0:
-                if iteration > 1 and opt.batch_decrease:
-                    opt.batch_size = max(1, opt.batch_size // 2)
-                    print(f"BATCH SIZE : {opt.batch_size} / SIDE LENGTH : {side_length}")
+
+        if (iteration-1) % opt.batch_decrease_step == 0 and opt.batch_decrease and iteration > 1 and opt.batch_size > opt.batch_decrease_until:
+            opt.batch_size = max(1, opt.batch_size // 2)
+            n_rays = (dummy_cam.image_height * dummy_cam.image_width) // opt.batch_size
+            print(f"BATCH SIZE : {opt.batch_size}")
+            if opt.batch_ray_type == "grid":
                 side_length = int(((dummy_cam.image_height * dummy_cam.image_width) // opt.batch_size) ** (1/2))
-                height_stride = int((dummy_cam.image_height-1) / (side_length-1))
-                width_stride = int((dummy_cam.image_width-1) / (side_length-1))
-                height_space = (dummy_cam.image_height-1)-(side_length-1)*height_stride
-                width_space = (dummy_cam.image_width-1)-(side_length-1)*width_stride
+                print(f"SIDE LENGTH : {side_length}")
+
+        if opt.batch_ray_type == "grid":
+            height_stride = int((dummy_cam.image_height-1) / (side_length-1))
+            width_stride = int((dummy_cam.image_width-1) / (side_length-1))
+            height_space = (dummy_cam.image_height-1)-(side_length-1)*height_stride
+            width_space = (dummy_cam.image_width-1)-(side_length-1)*width_stride
+
             
         if iteration > opt.batch_until or opt.batch_type == "none":
             cam_idxs = [cam_idx]
@@ -183,18 +191,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             aux_densify_grad = new_aux_densify_grad if aux_densify_grad is None else torch.max(aux_densify_grad, new_aux_densify_grad)
             gaussians._aux_scalar.grad = None
 
-        
-        
+    
         if opt.single_reg:
             reg_loss = 0
             reg_loss += args.opacity_reg * torch.abs(gaussians.get_opacity).mean() 
             reg_loss += args.scale_reg * torch.abs(gaussians.get_scaling).mean() 
             reg_loss.backward()
-        
-        if opt.batch_type != "none" and iteration <= opt.batch_until and opt.batch_ray_type != "grid":
-            visibility_count_list.append(visibility_count.bincount(minlength=opt.batch_size+1))
-            if iteration % 1000 == 0:
-                torch.save(torch.stack(visibility_count_list), os.path.join(dataset.model_path, f"visibility.pt"))
         
         with torch.no_grad():
             # Progress bar

@@ -107,6 +107,7 @@ class OptimizationParams(ParamGroup):
         self.batch_ray_type = "random" # ["random", "grid"]
         self.batch_decrease = False
         self.batch_decrease_step = 1000
+        self.batch_decrease_until = 1
         self.batch_grad_mean = False
         self.grid_ray_fix = False
 
