@@ -218,7 +218,7 @@ int CudaRasterizer::Rasterizer::forward(
 	float* out_color,
 	float* out_depth,
 	int* radii,
-	int* mask,
+	const int* mask,
 	bool debug)
 {
 	const float focal_y = height / (2.0f * tan_fovy);
@@ -373,7 +373,7 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dsh,
 	float* dL_dscale,
 	float* dL_drot,
-	int* mask,
+	const int* mask,
 	bool debug)
 {
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);

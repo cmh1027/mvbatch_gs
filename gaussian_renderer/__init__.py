@@ -30,6 +30,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         screenspace_points.retain_grad()
     except:
         pass
+    
     if batch_rays:
         if mask is None:
             mask = torch.ones(viewpoint_camera.image_height, viewpoint_camera.image_width, dtype=torch.int32, device=torch.device('cuda'))

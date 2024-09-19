@@ -71,7 +71,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         n_rays = (dummy_cam.image_height * dummy_cam.image_width) // opt.batch_size
         side_length = int(((dummy_cam.image_height * dummy_cam.image_width) // opt.batch_size) ** (1/2))
 
-
     for iteration in range(first_iter, opt.iterations + 1):        
         xyz_lr = gaussians.update_learning_rate(iteration)
 
@@ -83,9 +82,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         viewpoints = scene.getTrainCameras().copy()
         if not viewpoint_stack:
             viewpoint_stack = list(range(len(scene.getTrainCameras())))
-            random.shuffle(viewpoint_stack)
 
-        cam_idx = viewpoint_stack.pop()
+        cam_idx = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
 
 
         if (iteration-1) % opt.batch_decrease_step == 0 and opt.batch_decrease and iteration > 1 and opt.batch_size > opt.batch_decrease_until:
@@ -162,7 +160,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 loss_mask = None
 
             E_u, Ll1 = l1_loss(image, gt_image, mask=loss_mask)
-            if opt.batch_rays and iteration <= opt.batch_until:
+            if opt.batch_rays and len(cams) > 1:
                 lambda_dssim = 0
             else:
                 lambda_dssim = opt.lambda_dssim
@@ -224,7 +222,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     add_ratio = opt.add_ratio if opt.add_ratio > 0 else 0.05
                 else:
                     add_ratio = 0.05
-                gaussians.add_new_gs(cap_max=args.cap_max, aux_grad=aux_densify_grad, add_ratio=add_ratio, iteration=iteration)
+                gaussians.add_new_gs(opt, cap_max=args.cap_max, aux_grad=aux_densify_grad, add_ratio=add_ratio, iteration=iteration)
                 aux_densify_grad = None
 
             if iteration % 200 == 0 and len(gt_images) > 1 and dataset.log_batch:
@@ -246,6 +244,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             # Optimizer step
             if iteration < opt.iterations:
+                torch.cuda.synchronize()
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
 

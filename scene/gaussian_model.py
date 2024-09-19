@@ -140,7 +140,12 @@ class GaussianModel:
         print("Number of points at initialisation : ", fused_point_cloud.shape[0])
 
         dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
-        scales = torch.log(torch.sqrt(dist2)*init_scale)[...,None].repeat(1, 3)
+        if init_scale == -1:
+            radius = torch.tensor(np.sum(pcd.points**2, axis=-1)**(1/2)).to(dist2.device).float()
+            mult = 1 + (radius / radius.max() * 9)
+            scales = torch.log(torch.sqrt(dist2)*0.1*mult)[...,None].repeat(1, 3)
+        else:
+            scales = torch.log(torch.sqrt(dist2)*init_scale)[...,None].repeat(1, 3)
         rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
         rots[:, 0] = 1
 
@@ -429,11 +434,8 @@ class GaussianModel:
         new_opacity, new_scaling = compute_relocation_cuda(
             opacity_old=self.get_opacity[idxs, 0],
             scale_old=self.get_scaling[idxs],
-            N=ratio[idxs, 0]
+            N=ratio[idxs, 0] + 1
         )
-        # new_opacity = self.get_opacity[idxs, 0]
-        # new_scaling = self.get_scaling[idxs]
-
         new_opacity = torch.clamp(new_opacity.unsqueeze(-1), max=1.0 - torch.finfo(torch.float32).eps, min=0.005)
         new_opacity = self.inverse_opacity_activation(new_opacity)
         new_scaling = self.scaling_inverse_activation(new_scaling.reshape(-1, 3))
@@ -479,30 +481,24 @@ class GaussianModel:
 
         self.replace_tensors_to_optimizer(inds=reinit_idx) 
         
-    def add_new_gs(self, cap_max, aux_grad=None, add_ratio=0.05, iteration=None):
+    def add_new_gs(self, opt, cap_max, aux_grad=None, add_ratio=0.05, iteration=None):
         current_num_points = self._opacity.shape[0]
-        if aux_grad is None:
-            target_num = min(cap_max, int((1+add_ratio) * current_num_points))
-            num_gs = max(0, target_num - current_num_points)
-        else:
-            add_ratio_ = add_ratio
-            min_ratio = 0.1
-            add_ratio = add_ratio * min_ratio + max(0, (1 - (iteration / 10000))) * add_ratio * (1 - min_ratio)
-            aux_add_ratio = add_ratio_ - add_ratio
-            target_num = min(cap_max, int((1+add_ratio) * current_num_points))
-            aux_target_num = min(cap_max, int((1+aux_add_ratio) * current_num_points))
-            num_gs = max(0, target_num - current_num_points)
-            aux_num_gs = max(0, aux_target_num - current_num_points)
+
+        target_num = min(cap_max, int((1+add_ratio) * current_num_points))
+        num_gs = max(0, target_num - current_num_points)
 
         if num_gs <= 0:
             return 0
 
         probs = self.get_opacity.squeeze(-1) 
-        probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
-
+        EPS = torch.finfo(torch.float32).eps
+        probs = probs / (probs.sum() + EPS)
+        if aux_grad is not None:
+            probs[probs < EPS] = EPS
+            probs[aux_grad < opt.aux_densify_threshold] = EPS
+            probs = probs / (probs.sum() + EPS)
+        
         add_idx, ratio = self._sample_alives(probs=probs, num=num_gs)
-
-
         (
             new_xyz, 
             new_features_dc,

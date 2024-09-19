@@ -39,7 +39,7 @@ namespace BACKWARD
 		float* dL_dopacity,
 		float* dL_dcolors,
 		float* dL_ddepths,
-		int* mask);
+		const int* mask);
 
 	void preprocess(
 		int P, int D, int M,

@@ -273,7 +273,7 @@ renderCUDA(
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
 	float* __restrict__ out_depth,
-	int* __restrict__ mask)
+	const int* __restrict__ mask)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -292,7 +292,7 @@ renderCUDA(
 		inside_mask = h_start <= pix.y && pix.y < h_end && w_start <= pix.x && pix.x < w_end;
 	}
 	else{
-		inside_mask = mask[pix.y * W + pix.x];
+		inside_mask = (mask[pix.y * W + pix.x] == 1);
 	}
 	
 	inside = inside && inside_mask;
@@ -403,7 +403,7 @@ void FORWARD::render(
 	const float* bg_color,
 	float* out_color,
 	float* out_depth,
-	int* mask)
+	const int* mask)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,

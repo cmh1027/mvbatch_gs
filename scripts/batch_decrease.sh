@@ -3,7 +3,7 @@ UNTIL=$1
 for (( i=0; i<${#array[@]}; i++ ));
 do
     SCENE=${array[$i]}
-    python train.py --source_path data/mipnerf360/${SCENE} --config configs/${SCENE}.json -m output/${SCENE}/batch_decrease_u${UNTIL} --batch_type sample --batch_sample_strategy max --batch_ray_type random --batch_size 64 --batch_until 9000 --batch_partition --batch_rays --single_reg --batch_grad_mean --batch_decrease --batch_decrease_step 1000 --batch_decrease_until ${UNTIL}
+    python train.py --source_path data/mipnerf360/${SCENE} --config configs/${SCENE}.json -m output/${SCENE}/batch_decrease_u${UNTIL} --batch_type sample --batch_sample_strategy max --batch_ray_type random --batch_size 64 --batch_until 9000 --batch_partition --batch_rays --single_reg --batch_grad_mean --batch_decrease --batch_decrease_step 500 --batch_decrease_until ${UNTIL}
 done
 
 # 0 64

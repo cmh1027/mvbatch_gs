@@ -432,7 +432,7 @@ renderCUDA(
 	float* __restrict__ dL_dopacity,
 	float* __restrict__ dL_dcolors,
 	float* __restrict__ dL_ddepths,
-	int* __restrict__ mask)
+	const int* __restrict__ mask)
 {
 	// We rasterize again. Compute necessary block info.
 	auto block = cg::this_thread_block();
@@ -451,7 +451,7 @@ renderCUDA(
 		inside_mask = h_start <= pix.y && pix.y < h_end && w_start <= pix.x && pix.x < w_end;
 	}
 	else{
-		inside_mask = mask[pix.y * W + pix.x];
+		inside_mask = (mask[pix.y * W + pix.x] == 1);
 	}
 	
 	inside = inside && inside_mask;
@@ -688,7 +688,7 @@ void BACKWARD::render(
 	float* dL_dopacity,
 	float* dL_dcolors,
 	float* dL_ddepths,
-	int* mask)
+	const int* mask)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
 		ranges,
