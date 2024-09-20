@@ -56,8 +56,8 @@ class ModelParams(ParamGroup):
         self.eval = True
         self.cap_max = -1
         self.init_type = "random"
+        self.radius_mult = 3.0
         self.num_points = 100000
-        self.bg_pcd_name = ""
         self.t_coef = 1.0
         self.r_coef = 1.0
         self.num_imgs = -1
@@ -110,13 +110,13 @@ class OptimizationParams(ParamGroup):
         self.batch_decrease_until = 1
         self.batch_grad_mean = False
         self.grid_ray_fix = False
+        self.partial_ssim = False
 
         self.aux_densify = False
         self.aux_densify_threshold = 0.1
         self.aux_densify_from_iter = 0
 
         self.add_ratio = 0.05
-
         self.single_reg = False
         super().__init__(parser, "Optimization Parameters")
 

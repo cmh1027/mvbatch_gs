@@ -129,7 +129,7 @@ class GaussianModel:
         if self.active_sh_degree < self.max_sh_degree:
             self.active_sh_degree += 1
 
-    def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float, bg_pcd : BasicPointCloud = None, init_scale : float = 0.1):
+    def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float, init_scale : float = 0.1):
         self.spatial_lr_scale = spatial_lr_scale
         fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
         fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
@@ -160,29 +160,6 @@ class GaussianModel:
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self._aux_scalar = nn.Parameter(aux_scalars.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
-        if bg_pcd is not None:
-            fused_point_cloud = torch.tensor(np.asarray(bg_pcd.points)).float().cuda()
-            fused_color = RGB2SH(torch.tensor(np.asarray(bg_pcd.colors)).float().cuda())
-            features = torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
-            features[:, :3, 0 ] = fused_color
-            features[:, 3:, 1:] = 0.0
-
-            print("Number of bg points at initialisation : ", fused_point_cloud.shape[0])
-
-            dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(bg_pcd.points)).float().cuda()), 0.0000001)
-            scales = torch.log(torch.sqrt(dist2)*0.1)[...,None].repeat(1, 3)
-            rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
-            rots[:, 0] = 1
-
-            opacities = inverse_sigmoid(0.99 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
-            aux_scalars = torch.zeros((fused_point_cloud.shape[0], 2), device="cuda")
-
-            self._xyz = nn.Parameter(torch.cat([self._xyz.data, fused_point_cloud], dim=0))
-            self._features_dc = nn.Parameter(torch.cat([self._features_dc.data, features[:,:,0:1].transpose(1, 2).contiguous()], dim=0))
-            self._features_rest = nn.Parameter(torch.cat([self._features_rest.data, features[:,:,1:].transpose(1, 2).contiguous()], dim=0))
-            self._scaling = nn.Parameter(torch.cat([self._scaling.data, scales], dim=0))
-            self._rotation = nn.Parameter(torch.cat([self._rotation.data, rots], dim=0))
-            self._aux_scalar = nn.Parameter(torch.cat([self._aux_scalar.data, aux_scalars], dim=0))
 
 
     def training_setup(self, training_args):

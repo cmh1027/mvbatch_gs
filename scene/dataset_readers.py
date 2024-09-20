@@ -15,7 +15,7 @@ from PIL import Image
 from typing import NamedTuple
 from scene.colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec2rotmat, \
     read_extrinsics_binary, read_intrinsics_binary, read_points3D_binary, read_points3D_text
-from utils.graphics_utils import getWorld2View2, focal2fov, fov2focal
+from utils.graphics_utils import getWorld2View2, focal2fov, fov2focal, merge_pcd
 import numpy as np
 import json
 from pathlib import Path
@@ -37,7 +37,6 @@ class CameraInfo(NamedTuple):
 
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
-    bg_point_cloud: BasicPointCloud
     train_cameras: list
     test_cameras: list
     nerf_normalization: dict
@@ -157,53 +156,46 @@ def readColmapSceneInfo(path, images, args, llffhold=8):
         test_cam_infos = []
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
-
+    ply_path = None
     if args.init_type == "sfm":
-        ply_path = os.path.join(path, "sparse/0/points3D.ply")
-        bin_path = os.path.join(path, "sparse/0/points3D.bin")
-        txt_path = os.path.join(path, "sparse/0/points3D.txt")
-        if not os.path.exists(ply_path):
-            print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
-            try:
-                xyz, rgb, _ = read_points3D_binary(bin_path)
-            except:
-                xyz, rgb, _ = read_points3D_text(txt_path)
-        pcd = fetchPly(ply_path)
-    elif "random" in args.init_type:
-        if args.init_type == "random":
-            radius_mult = 3
-        else:
-            radius_mult = float(args.init_type.replace("random", ""))
-        ply_path = os.path.join(path, "random.ply")
-        print(f"Generating random point cloud ({args.num_points})...")
-        
-        xyz = np.random.random((args.num_points, 3)) * nerf_normalization["radius"]* radius_mult*2 -(nerf_normalization["radius"]*radius_mult)
-        
-        
-        shs = np.random.random((xyz.shape[0], 3)) / 255.0
-        pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((xyz.shape[0], 3)))
+        pcd, ply_path = read_sfm_pcd(path)
+    elif args.init_type == "random":
+        pcd = generate_random_pcd(nerf_normalization["radius"], args.radius_mult, args.num_points)
+    elif args.init_type == "sfm_random":
+        sfm_pcd, _ = read_sfm_pcd(path)
+        random_pcd = generate_random_pcd(nerf_normalization["radius"], args.radius_mult, sfm_pcd.points.shape[0])
+        pcd = merge_pcd(sfm_pcd, random_pcd)
+        print(f"Merging random and SFM point clouds ({len(pcd.points)})...")
     else:
         print("Please specify a correct init_type: random or sfm")
         exit(0)
-    bg_pcd = None
-    if args.bg_pcd_name != "":
-        print(f"Append background pointcloud {args.bg_pcd_name}.ply")
-        ply_path = os.path.join(path, f"sparse/0/{args.bg_pcd_name}.ply")
-        mult = 20
-        bg_pcd = fetchPly(ply_path)
-        offset = (np.random.rand(mult * bg_pcd.points.shape[0], 3) - 0.5) * 5
-        bg_point = bg_pcd.points[None, ...].repeat(mult, axis=0).reshape(-1, 3) + offset
-        bg_color = bg_pcd.colors[None, ...].repeat(mult, axis=0).reshape(-1, 3)
-        bg_normal = bg_pcd.normals[None, ...].repeat(mult, axis=0).reshape(-1, 3)
-        bg_pcd = BasicPointCloud(points=bg_point, colors=bg_color, normals=bg_normal)
 
     scene_info = SceneInfo(point_cloud=pcd,
-                           bg_point_cloud=bg_pcd,
                            train_cameras=train_cam_infos,
                            test_cameras=test_cam_infos,
                            nerf_normalization=nerf_normalization,
                            ply_path=ply_path)
     return scene_info
+
+def read_sfm_pcd(root):
+    ply_path = os.path.join(root, "sparse/0/points3D.ply")
+    bin_path = os.path.join(root, "sparse/0/points3D.bin")
+    txt_path = os.path.join(root, "sparse/0/points3D.txt")
+    if not os.path.exists(ply_path):
+        print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
+        try:
+            xyz, rgb, _ = read_points3D_binary(bin_path)
+        except:
+            xyz, rgb, _ = read_points3D_text(txt_path)
+    pcd = fetchPly(ply_path)
+    return pcd, ply_path
+
+def generate_random_pcd(radius, radius_mult, num_points):
+    print(f"Generating random point cloud ({num_points})...")
+    xyz = np.random.random((num_points, 3)) * radius* radius_mult*2 -(radius*radius_mult)
+    shs = np.random.random((xyz.shape[0], 3)) / 255.0
+    pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((xyz.shape[0], 3)))
+    return pcd
 
 def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png"):
     cam_infos = []

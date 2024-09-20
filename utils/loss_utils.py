@@ -20,7 +20,9 @@ def l1_loss(network_output, gt, mask=None):
     loss = torch.abs((network_output - gt))
     if mask is not None:
         loss = loss * mask[None, ...]
-    return loss, loss.mean()
+        return loss, loss.sum() / mask.sum()
+    else:
+        return loss, loss.mean()
 
 def l2_loss(network_output, gt):
     return ((network_output - gt) ** 2).mean()
@@ -35,7 +37,7 @@ def create_window(window_size, channel):
     window = Variable(_2D_window.expand(channel, 1, window_size, window_size).contiguous())
     return window
 
-def ssim(img1, img2, window_size=11):
+def ssim(img1, img2, window_size=11, mask=None):
     channel = img1.size(-3)
     global _window
     if _window is None:
@@ -45,19 +47,30 @@ def ssim(img1, img2, window_size=11):
         window = window.cuda(img1.get_device())
     window = window.type_as(img1)
 
-    return _ssim(img1, img2, window, window_size, channel)
+    return _ssim(img1, img2, window, window_size, channel, mask=mask)
 
-def _ssim(img1, img2, window, window_size, channel):
-    mu1 = F.conv2d(img1, window, padding=window_size // 2, groups=channel)
-    mu2 = F.conv2d(img2, window, padding=window_size // 2, groups=channel)
+def conv2d(img, window, padding, groups, mask=None):
+    if mask is None:
+        masked_window = 1
+    else:
+        masked_window = F.conv2d(mask, window, padding=padding)
+    return F.conv2d(img, window, padding=padding, groups=groups) / masked_window
+
+def _ssim(img1, img2, window, window_size, channel, mask=None):
+    if mask is not None:
+        mask = mask[None, ...]
+        img1 = img1 * mask
+        img2 = img2 * mask
+    mu1 = conv2d(img1, window, window_size // 2, channel, mask=mask)
+    mu2 = conv2d(img2, window, window_size // 2, channel, mask=mask)
 
     mu1_sq = mu1.pow(2)
     mu2_sq = mu2.pow(2)
     mu1_mu2 = mu1 * mu2
 
-    sigma1_sq = F.conv2d(img1 * img1, window, padding=window_size // 2, groups=channel) - mu1_sq
-    sigma2_sq = F.conv2d(img2 * img2, window, padding=window_size // 2, groups=channel) - mu2_sq
-    sigma12 = F.conv2d(img1 * img2, window, padding=window_size // 2, groups=channel) - mu1_mu2
+    sigma1_sq = conv2d(img1 * img1, window, window_size // 2, channel, mask=mask) - mu1_sq
+    sigma2_sq = conv2d(img2 * img2, window, window_size // 2, channel, mask=mask) - mu2_sq
+    sigma12 = conv2d(img1 * img2, window, window_size // 2, channel, mask=mask) - mu1_mu2
 
     C1 = 0.01 ** 2
     C2 = 0.03 ** 2

@@ -19,6 +19,11 @@ class BasicPointCloud(NamedTuple):
     colors : np.array
     normals : np.array
 
+def merge_pcd(pcd1, pcd2):
+    return BasicPointCloud(points=np.concatenate([pcd1.points, pcd2.points]), 
+                           colors=np.concatenate([pcd1.colors, pcd2.colors]), 
+                           normals=np.concatenate([pcd1.normals, pcd2.normals]))
+
 def geom_transform_points(points, transf_matrix):
     P, _ = points.shape
     ones = torch.ones(P, 1, dtype=points.dtype, device=points.device)

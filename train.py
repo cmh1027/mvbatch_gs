@@ -115,7 +115,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         cams = [viewpoints[idx] for idx in cam_idxs]
         aux_densify_grad = None
         aux_densify = opt.aux_densify and iteration >= opt.aux_densify_from_iter
-        gt_images = []
         for idx, viewpoint_cam in enumerate(cams):
             bg = torch.rand((3), device="cuda") if opt.random_background else background
             if opt.batch_rays:
@@ -151,22 +150,23 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             visibility_count = visibility_count + visibility_filter.to(visibility_count.dtype)
             # Loss
             gt_image = viewpoint_cam.original_image.cuda()
-            gt_images += [viewpoint_cam.original_image]
-            if opt.batch_rays:
-                loss_mask = pmask.reshape(image.shape[1:])
-            else:
-                image = image[:, h_start:h_end, w_start:w_end]
-                gt_image = gt_image[:, h_start:h_end, w_start:w_end]
+            if iteration > opt.batch_until:
                 loss_mask = None
+            else:
+                if opt.batch_rays:
+                    loss_mask = pmask.reshape(image.shape[1:]).to(torch.float)
+                else:
+                    loss_mask = torch.zeros_like(image[0:1, ...])
+                    loss_mask[:, h_start:h_end, w_start:w_end] = 1
 
             E_u, Ll1 = l1_loss(image, gt_image, mask=loss_mask)
-            if opt.batch_rays and len(cams) > 1:
+            if opt.batch_rays and len(cams) > 1 and not opt.partial_ssim:
                 lambda_dssim = 0
             else:
                 lambda_dssim = opt.lambda_dssim
             loss = (1.0 - lambda_dssim) * Ll1
             if lambda_dssim > 0:
-                ssim_map = ssim(image, gt_image)
+                ssim_map = ssim(image, gt_image, mask=loss_mask)
                 ssim_loss = 1 - ssim_map
                 loss += lambda_dssim * ssim_loss.mean()
 
@@ -177,7 +177,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     loss += (ssim_loss.detach() * R_u).sum()
             if not opt.single_reg:
                 loss += args.opacity_reg * torch.abs(gaussians.get_opacity).mean() 
-                loss += args.scale_reg * torch.abs(gaussians.get_scaling).mean() 
+                loss += args.scale_reg * torch.abs(gaussians.get_scaling).mean()
+            if not opt.batch_grad_mean:
+                loss = loss / len(cams)
             loss.backward()
 
         if opt.batch_grad_mean:
@@ -225,9 +227,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.add_new_gs(opt, cap_max=args.cap_max, aux_grad=aux_densify_grad, add_ratio=add_ratio, iteration=iteration)
                 aux_densify_grad = None
 
-            if iteration % 200 == 0 and len(gt_images) > 1 and dataset.log_batch:
-                os.makedirs(os.path.join(dataset.model_path, "batch"), exist_ok=True)
-                save_image(torch.cat(gt_images[:4], dim=1), os.path.join(dataset.model_path, f"batch/{'%03d' % (iteration // 200)}.png"))
 
             if iteration % args.vis_iteration_interval == 0:
                 os.makedirs(os.path.join(dataset.model_path, "vis"), exist_ok=True)

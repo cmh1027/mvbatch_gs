@@ -82,7 +82,7 @@ class Scene:
                                                            "iteration_" + str(self.loaded_iter),
                                                            "point_cloud.ply"))
         else:
-            self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, bg_pcd=scene_info.bg_point_cloud, init_scale=args.init_scale)
+            self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, init_scale=args.init_scale)
 
         Rs, Ts = [], []
         for cam in scene_info.train_cameras:
