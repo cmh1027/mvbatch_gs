@@ -1,4 +1,4 @@
-array=("bicycle" "bonsai" "counter" "flowers" "garden" "kitchen" "room" "stump" "treehill")
+array=("stump" "bicycle" "bonsai" "counter" "flowers" "garden" "kitchen" "room" "treehill")
 BATCH=$1
 for (( i=0; i<${#array[@]}; i++ ));
 do

@@ -1,5 +1,0 @@
-SCENE=$1
-python train.py --source_path data/mipnerf360/${SCENE} --config configs/${SCENE}.json -m output/${SCENE}/batch_grid_sreg_s1.0 --batch_type sample --batch_sample_strategy random --batch_ray_type grid --batch_size 128 --batch_until 9000 --batch_partition --batch_rays --single_reg --init_scale 1.0
-python train.py --source_path data/mipnerf360/${SCENE} --config configs/${SCENE}.json -m output/${SCENE}/batch_grid_mreg_s1.0 --batch_type sample --batch_sample_strategy random --batch_ray_type grid --batch_size 128 --batch_until 9000 --batch_partition --batch_rays --init_scale 1.0
-python train.py --source_path data/mipnerf360/${SCENE} --config configs/${SCENE}.json -m output/${SCENE}/batch_grid_sreg_s0.1 --batch_type sample --batch_sample_strategy random --batch_ray_type grid --batch_size 128 --batch_until 9000 --batch_partition --batch_rays --single_reg --init_scale 0.1
-python train.py --source_path data/mipnerf360/${SCENE} --config configs/${SCENE}.json -m output/${SCENE}/batch_grid_mreg_s0.1 --batch_type sample --batch_sample_strategy random --batch_ray_type grid --batch_size 128 --batch_until 9000 --batch_partition --batch_rays --init_scale 0.1

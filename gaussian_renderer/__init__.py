@@ -17,7 +17,7 @@ from aux_diff_gaussian_rasterization import GaussianRasterizationSettings as Aux
 from aux_diff_gaussian_rasterization import GaussianRasterizer as AuxGaussianRasterizer
 from utils.sh_utils import eval_sh
 
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, mask=None, batch_rays=False, aux_densify=False):
+def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, mask=None, aux_densify=False):
     """
     Render the scene. 
     
@@ -31,18 +31,10 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     except:
         pass
     
-    if batch_rays:
-        if mask is None:
-            mask = torch.ones(viewpoint_camera.image_height, viewpoint_camera.image_width, dtype=torch.int32, device=torch.device('cuda'))
-    else:
-        if mask is None:
-            h_start = 0
-            h_end = viewpoint_camera.image_height
-            w_start = 0
-            w_end = viewpoint_camera.image_width
-            mask = torch.tensor([h_start, h_end, w_start, w_end, -1], dtype=torch.int32, device=torch.device('cuda'))
-        else:
-            assert mask.dtype is torch.int32
+
+    if mask is None:
+        mask = torch.ones(viewpoint_camera.image_height, viewpoint_camera.image_width, dtype=torch.int32, device=torch.device('cuda'))
+
 
     # Set up rasterization configuration
     tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)

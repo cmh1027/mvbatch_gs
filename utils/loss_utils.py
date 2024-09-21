@@ -54,13 +54,14 @@ def conv2d(img, window, padding, groups, mask=None):
         masked_window = 1
     else:
         masked_window = F.conv2d(mask, window, padding=padding)
-    return F.conv2d(img, window, padding=padding, groups=groups) / masked_window
+    return F.conv2d(img, window, padding=padding, groups=groups) / (masked_window + torch.finfo(torch.float32).eps)
 
 def _ssim(img1, img2, window, window_size, channel, mask=None):
     if mask is not None:
         mask = mask[None, ...]
         img1 = img1 * mask
         img2 = img2 * mask
+
     mu1 = conv2d(img1, window, window_size // 2, channel, mask=mask)
     mu2 = conv2d(img2, window, window_size // 2, channel, mask=mask)
 

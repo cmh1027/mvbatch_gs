@@ -98,26 +98,24 @@ class OptimizationParams(ParamGroup):
         self.scale_reg = 0.01
         self.opacity_reg = 0.01
 
-        self.batch_type = "none" # ["none", "window", "sample", "same"]
         self.batch_sample_strategy = "max" # ["min", "max", "random"]
         self.batch_size = 1
-        self.batch_until = 7000
+        self.batch_until = 30000
         self.batch_partition = False
-        self.batch_rays = False
-        self.batch_ray_type = "random" # ["random", "grid"]
-        self.batch_decrease = False
-        self.batch_decrease_step = 1000
-        self.batch_decrease_until = 1
-        self.batch_grad_mean = False
-        self.grid_ray_fix = False
-        self.partial_ssim = False
+        
+        self.single_partial_rays = False
+        self.single_partial_rays_denom = 1
+        self.log_single_partial = False
+        self.log_single_partial_interval = 100
 
         self.aux_densify = False
         self.aux_densify_threshold = 0.1
         self.aux_densify_from_iter = 0
 
         self.add_ratio = 0.05
-        self.single_reg = False
+
+        self.turn_off_print = False
+        self.forced_exit = 1e+8
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

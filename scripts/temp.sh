@@ -1,0 +1,1 @@
+python train.py --source_path data/mipnerf360/${SCENE} --config configs/${SCENE}.json -m output/${SCENE}/batch${BATCH}_max --batch_sample_strategy max --batch_size ${BATCH} --batch_until 30000

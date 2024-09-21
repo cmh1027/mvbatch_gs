@@ -56,27 +56,33 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
 
-    if opt.batch_size != -1 and opt.batch_type != "none":
-        if not opt.batch_rays:
-            opt.batch_size = min(opt.batch_size, len(scene.getTrainCameras()))
-            opt.batch_size = int(min(opt.batch_size, len(scene.getTrainCameras())) ** (1/2)) ** 2
-            patch_size = int(opt.batch_size ** (1/2))
+    opt.batch_size = min(opt.batch_size, len(scene.getTrainCameras()))
+    print(f"BATCH SIZE : {opt.batch_size}")
+
+    dummy_cam = scene.getTrainCameras()[0]
+    pmask = torch.zeros(dummy_cam.image_height*dummy_cam.image_width, dtype=torch.int32, device=torch.device('cuda'))
+    if opt.batch_size == 1 and opt.single_partial_rays:
+        n_rays = (dummy_cam.image_height * dummy_cam.image_width) // opt.single_partial_rays_denom
+    else:
+        if opt.batch_partition:
+            n_rays = (dummy_cam.image_height * dummy_cam.image_width)
         else:
-            opt.batch_size = min(opt.batch_size, len(scene.getTrainCameras()))
-        print(f"BATCH SIZE : {opt.batch_size}")
+            n_rays = (dummy_cam.image_height * dummy_cam.image_width) // opt.batch_size
+    print(f"Image ({dummy_cam.image_height} x {dummy_cam.image_width} = {dummy_cam.image_height * dummy_cam.image_width}), n_rays : {n_rays}")
 
-    if opt.batch_rays:
-        dummy_cam = scene.getTrainCameras()[0]
-        pmask = torch.zeros(dummy_cam.image_height*dummy_cam.image_width, dtype=torch.int32, device=torch.device('cuda'))
-        n_rays = (dummy_cam.image_height * dummy_cam.image_width) // opt.batch_size
-        side_length = int(((dummy_cam.image_height * dummy_cam.image_width) // opt.batch_size) ** (1/2))
-
-    for iteration in range(first_iter, opt.iterations + 1):        
+    for iteration in range(first_iter, opt.iterations + 1): 
+        if iteration == opt.forced_exit:
+            print("FORCED EXIT")
+            exit(0)       
         xyz_lr = gaussians.update_learning_rate(iteration)
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
         if iteration % 1000 == 0:
             gaussians.oneupSHdegree()
+
+        if iteration == opt.batch_until and opt.batch_size > 1:
+            print("BATCH IS TURNED OFF")
+            opt.batch_size = 1
 
         # Pick a random Camera
         viewpoints = scene.getTrainCameras().copy()
@@ -85,85 +91,41 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         cam_idx = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
 
-
-        if (iteration-1) % opt.batch_decrease_step == 0 and opt.batch_decrease and iteration > 1 and opt.batch_size > opt.batch_decrease_until:
-            opt.batch_size = max(1, opt.batch_size // 2)
-            n_rays = (dummy_cam.image_height * dummy_cam.image_width) // opt.batch_size
-            print(f"BATCH SIZE : {opt.batch_size}")
-            if opt.batch_ray_type == "grid":
-                side_length = int(((dummy_cam.image_height * dummy_cam.image_width) // opt.batch_size) ** (1/2))
-                print(f"SIDE LENGTH : {side_length}")
-
-        if opt.batch_ray_type == "grid":
-            height_stride = int((dummy_cam.image_height-1) / (side_length-1))
-            width_stride = int((dummy_cam.image_width-1) / (side_length-1))
-            height_space = (dummy_cam.image_height-1)-(side_length-1)*height_stride
-            width_space = (dummy_cam.image_width-1)-(side_length-1)*width_stride
-
-            
-        if iteration > opt.batch_until or opt.batch_type == "none":
+        if opt.batch_size == 1:
             cam_idxs = [cam_idx]
-        elif opt.batch_type == "window":
-            window = (opt.batch_size - 1) // 2
-            cam_idxs = range(max(0, cam_idx-window), min(len(viewpoints), cam_idx+window+1))
-        elif opt.batch_type == "sample":
-            cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, strategy=opt.batch_sample_strategy)
         else:
-            raise NotImplementedError
+            cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, strategy=opt.batch_sample_strategy)
 
-        visibility_count = torch.zeros_like(gaussians.get_opacity[..., 0], dtype=torch.uint8)
         cams = [viewpoints[idx] for idx in cam_idxs]
         aux_densify_grad = None
         aux_densify = opt.aux_densify and iteration >= opt.aux_densify_from_iter
+
         for idx, viewpoint_cam in enumerate(cams):
             bg = torch.rand((3), device="cuda") if opt.random_background else background
-            if opt.batch_rays:
-                if len(cams) > 1 and opt.batch_partition:
-                    pmask[:] = 0
-                    if opt.batch_ray_type == "random":
-                        pmask[torch.randperm(len(pmask), device=torch.device('cuda'))[:n_rays]] = 1
-                    elif opt.batch_ray_type == "grid":
-                        pmask = pmask.view(dummy_cam.image_height, dummy_cam.image_width)
-                        pmask[random.randrange(height_space+1)::height_stride, random.randrange(width_space+1)::width_stride] = 1
-                        pmask = pmask.flatten()
-                    else:
-                        raise NotImplementedError
-                else:
-                    pmask[:] = 1
+            if n_rays == (dummy_cam.image_height * dummy_cam.image_width):
+                pmask = None
             else:
-                if len(cams) > 1 and opt.batch_partition:
-                    h_start = random.randrange(0, viewpoint_cam.image_height+1 - viewpoint_cam.image_height//patch_size)
-                    h_end = h_start + viewpoint_cam.image_height//patch_size
-                    w_start = random.randrange(0, viewpoint_cam.image_width+1 - viewpoint_cam.image_width//patch_size)
-                    w_end = w_start + viewpoint_cam.image_width//patch_size
-                else:
-                    h_start = 0
-                    h_end = viewpoint_cam.image_height
-                    w_start = 0
-                    w_end = viewpoint_cam.image_width
-                pmask = torch.tensor([h_start, h_end, w_start, w_end, -1], dtype=torch.int32, device=torch.device('cuda'))
+                pmask[:] = 0
+                pmask[torch.randperm(len(pmask), device=torch.device('cuda'))[:n_rays]] = 1
 
-            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, mask=pmask, batch_rays=opt.batch_rays, aux_densify=aux_densify)
+            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, mask=pmask, aux_densify=aux_densify)
             image = render_pkg["render"][:3, :]
             depth = render_pkg["depth"]
             visibility_filter = render_pkg["visibility_filter"]
-            visibility_count = visibility_count + visibility_filter.to(visibility_count.dtype)
+
+            if opt.batch_size == 1 and opt.log_single_partial and iteration % opt.log_single_partial_interval == 0:
+                tb_writer.add_scalar('vis_ratio', visibility_filter.sum() / len(visibility_filter), iteration)
+                os.makedirs(os.path.join(dataset.model_path, "data/vis_mask"), exist_ok=True)
+                torch.save(visibility_filter.cpu(), os.path.join(dataset.model_path, "data/vis_mask", f"{'%05d' % iteration}.pt"))
             # Loss
             gt_image = viewpoint_cam.original_image.cuda()
-            if iteration > opt.batch_until:
+            if pmask is None:
                 loss_mask = None
             else:
-                if opt.batch_rays:
-                    loss_mask = pmask.reshape(image.shape[1:]).to(torch.float)
-                else:
-                    loss_mask = torch.zeros_like(image[0:1, ...])
-                    loss_mask[:, h_start:h_end, w_start:w_end] = 1
+                loss_mask = pmask.reshape(image.shape[1:]).to(torch.float)
 
             E_u, Ll1 = l1_loss(image, gt_image, mask=loss_mask)
-            if opt.batch_rays and len(cams) > 1 and not opt.partial_ssim:
-                lambda_dssim = 0
-            else:
-                lambda_dssim = opt.lambda_dssim
+            lambda_dssim = opt.lambda_dssim
             loss = (1.0 - lambda_dssim) * Ll1
             if lambda_dssim > 0:
                 ssim_map = ssim(image, gt_image, mask=loss_mask)
@@ -175,15 +137,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 loss += (E_u.detach() * R_u).sum()
                 if lambda_dssim > 0:
                     loss += (ssim_loss.detach() * R_u).sum()
-            if not opt.single_reg:
-                loss += args.opacity_reg * torch.abs(gaussians.get_opacity).mean() 
-                loss += args.scale_reg * torch.abs(gaussians.get_scaling).mean()
-            if not opt.batch_grad_mean:
-                loss = loss / len(cams)
-            loss.backward()
 
-        if opt.batch_grad_mean:
-            gaussians.grad_mean(visibility_count)
+            loss = loss / len(cams)
+            loss.backward()
 
         if aux_densify:
             new_aux_densify_grad = gaussians._aux_scalar.grad.detach()[..., 0]
@@ -191,12 +147,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             aux_densify_grad = new_aux_densify_grad if aux_densify_grad is None else torch.max(aux_densify_grad, new_aux_densify_grad)
             gaussians._aux_scalar.grad = None
 
-    
-        if opt.single_reg:
-            reg_loss = 0
-            reg_loss += args.opacity_reg * torch.abs(gaussians.get_opacity).mean() 
-            reg_loss += args.scale_reg * torch.abs(gaussians.get_scaling).mean() 
-            reg_loss.backward()
+        reg_loss = 0
+        reg_loss += args.opacity_reg * torch.abs(gaussians.get_opacity).mean() 
+        reg_loss += args.scale_reg * torch.abs(gaussians.get_scaling).mean() 
+        reg_loss.backward()
         
         with torch.no_grad():
             # Progress bar
@@ -213,18 +167,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration == opt.iterations:
                 progress_bar.close()
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, testing_iterations, scene, render, (pipe, background))
+            training_report(opt, tb_writer, iteration, Ll1, loss, l1_loss, testing_iterations, scene, render, (pipe, background))
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
             if iteration < opt.densify_until_iter and iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                 dead_mask = (gaussians.get_opacity <= 0.005).squeeze(-1)
                 gaussians.relocate_gs(dead_mask=dead_mask)
-                if aux_densify:
-                    add_ratio = opt.add_ratio if opt.add_ratio > 0 else 0.05
-                else:
-                    add_ratio = 0.05
-                gaussians.add_new_gs(opt, cap_max=args.cap_max, aux_grad=aux_densify_grad, add_ratio=add_ratio, iteration=iteration)
+                gaussians.add_new_gs(opt, cap_max=args.cap_max, aux_grad=aux_densify_grad, add_ratio=opt.add_ratio, iteration=iteration)
                 aux_densify_grad = None
 
 
@@ -283,7 +233,7 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, testing_iterations, scene : Scene, renderFunc, renderArgs):
+def training_report(opt, tb_writer, iteration, Ll1, loss, l1_loss, testing_iterations, scene : Scene, renderFunc, renderArgs):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
@@ -308,8 +258,9 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, testing_iterations
                     l1_test += l1_loss(image, gt_image)[1].double()
                     psnr_test += psnr(image, gt_image).mean().double()
                 psnr_test /= len(config['cameras'])
-                l1_test /= len(config['cameras'])          
-                print("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, config['name'], l1_test, psnr_test))
+                l1_test /= len(config['cameras'])
+                if not opt.turn_off_print:
+                    print("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, config['name'], l1_test, psnr_test))
                 if tb_writer:
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - l1_loss', l1_test, iteration)
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - psnr', psnr_test, iteration)
@@ -330,13 +281,15 @@ if __name__ == "__main__":
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, default=list(range(3000, 30001, 3000)))
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[50, 500,1000,2000,3000,4000,5000,7000,9000,15000,30000])
+    parser.add_argument("--test_iteration_interval", type=int)
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[3000,7000,30000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--vis_iteration_interval", "-vi", type=int, default=500)
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
-    
+    if args.test_iteration_interval is not None:
+        args.test_iterations = list(range(args.test_iteration_interval, 30001, args.test_iteration_interval))
     if args.config is not None:
         # Load the configuration file
         config = load_config(args.config)
