@@ -11,7 +11,7 @@ array=("room" "bicycle" "flowers" "treehill")
 for (( i=0; i<${#array[@]}; i++ ));
 do
     SCENE=${array[$i]}
-    python train.py --source_path data/mipnerf360/${SCENE} --config configs/${SCENE}.json -m output/${SCENE}/sfm_batch4_end --init_type sfm --batch_size 4
+    python train.py --source_path data/mipnerf360/${SCENE} --config configs/${SCENE}.json -m output/${SCENE}/sfm_batch4_end --init_type sfm --batch_size 4 --batch_partition
 done
 
 

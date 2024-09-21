@@ -1,3 +1,4 @@
 SCENE=$1
-python train.py --source_path data/mipnerf360/${SCENE} --config configs/${SCENE}.json -m output/${SCENE}/batch${BATCH}_random --batch_sample_strategy random --batch_size ${BATCH} --batch_until 30000
-python train.py --source_path data/mipnerf360/${SCENE} --config configs/${SCENE}.json -m output/${SCENE}/batch${BATCH}_min --batch_sample_strategy min --batch_size ${BATCH} --batch_until 30000
+python train.py --source_path data/mipnerf360/${SCENE} --config configs/${SCENE}.json -m output/${SCENE}/sfm_batch4_end_min --init_type sfm --batch_size 4 --batch_sample_strategy min
+python train.py --source_path data/mipnerf360/${SCENE} --config configs/${SCENE}.json -m output/${SCENE}/sfm_batch4_end_random --init_type sfm --batch_size 4 --batch_sample_strategy random
+

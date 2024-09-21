@@ -444,10 +444,10 @@ renderCUDA(
 	const float2 pixf = { (float)pix.x, (float)pix.y };
 
 	// Check if this thread is associated with a valid pixel or outside.
-	const int h_start = mask[0], h_end = mask[1], w_start = mask[2], w_end = mask[3];
 	bool inside = pix.x < W && pix.y < H;
-	bool inside_mask = (mask[pix.y * W + pix.x] == 1);
-	inside = inside && inside_mask;
+	if(inside){
+		inside = inside && mask[pix_id];
+	}
 	const uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
 
 	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);

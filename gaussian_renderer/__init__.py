@@ -33,9 +33,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     
 
     if mask is None:
-        mask = torch.ones(viewpoint_camera.image_height, viewpoint_camera.image_width, dtype=torch.int32, device=torch.device('cuda'))
-
-
+        mask = torch.ones(viewpoint_camera.image_height*viewpoint_camera.image_width, dtype=torch.int32, device=torch.device('cuda'))
     # Set up rasterization configuration
     tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
     tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
@@ -132,7 +130,6 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             cov3D_precomp = None
         )
         return_dict["aux_render"] = rendered_aux
-        
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
     return return_dict
