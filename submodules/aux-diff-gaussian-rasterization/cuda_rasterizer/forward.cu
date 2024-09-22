@@ -221,15 +221,9 @@ renderCUDA(
 	// Check if this thread is associated with a valid pixel or outside.
 	const int h_start = mask[0], h_end = mask[1], w_start = mask[2], w_end = mask[3];
 	bool inside = pix.x < W && pix.y < H;
-	bool inside_mask;
-	if(mask[4] == -1){
-		inside_mask = h_start <= pix.y && pix.y < h_end && w_start <= pix.x && pix.x < w_end;
+	if(inside){
+		inside = inside && mask[pix_id];
 	}
-	else{
-		inside_mask = mask[pix.y * W + pix.x];
-	}
-	
-	inside = inside && inside_mask;
 	// Done threads can help with fetching, but don't rasterize
 	bool done = !inside;
 

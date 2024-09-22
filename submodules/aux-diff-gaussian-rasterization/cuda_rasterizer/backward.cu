@@ -46,14 +46,9 @@ renderCUDA(
 
 	const int h_start = mask[0], h_end = mask[1], w_start = mask[2], w_end = mask[3];
 	bool inside = pix.x < W && pix.y < H;
-	bool inside_mask;
-	if(mask[4] == -1){
-		inside_mask = h_start <= pix.y && pix.y < h_end && w_start <= pix.x && pix.x < w_end;
+	if(inside){
+		inside = inside && mask[pix_id];
 	}
-	else{
-		inside_mask = mask[pix.y * W + pix.x];
-	}
-	inside = inside && inside_mask;
 	const uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
 
 	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);

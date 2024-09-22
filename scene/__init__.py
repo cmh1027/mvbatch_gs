@@ -17,7 +17,7 @@ from scene.dataset_readers import sceneLoadTypeCallbacks
 from scene.gaussian_model import GaussianModel
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
-from utils.graphics_utils import getC2W
+from utils.graphics_utils import getWorld2View2
 import torch
 import numpy as np
 class Scene:
@@ -86,7 +86,8 @@ class Scene:
 
         Rs, Ts = [], []
         for cam in scene_info.train_cameras:
-            C2W = getC2W(cam.R, cam.T)
+            W2C = getWorld2View2(cam.R, cam.T)
+            C2W = np.linalg.inv(W2C)
             Rs.append(cam.R[:3, :3])
             Ts.append(C2W[:3, 3])
         Rs = torch.from_numpy(np.stack(Rs)).float()
@@ -95,13 +96,12 @@ class Scene:
         R_distance = torch.zeros((len(Rs), len(Rs)))  # Initialize an NxN matrix to store distances # (N,N)
         for i in range(len(Rs)):
             for j in range(i+1, len(Rs)):
-                # R_ij = torch.matmul(Rs[i], Rs[j])
-                # trace_Rij = torch.trace(R_ij)
-                # distance = torch.arccos((trace_Rij - 1) / 2) # (0, pi)
-                distance = (torch.dot(Rs[i][2, ...], Rs[j][2, ...]) + 1) / 2 # [0, 1]
+                distance = (-torch.dot(Rs[i][..., 2], Rs[j][..., 2]) + 1) / 2 # [0, 1]
+                distance = (-torch.dot(Rs[i][..., 2], Rs[j][..., 2]) + 1) / 2 # [0, 1]
                 R_distance[i, j] = distance
                 R_distance[j, i] = distance
-        
+        # 0 => 0
+        # MAX => inf
         R_max = R_distance.max(dim=1, keepdim=True)[0]
         R_distance = -torch.log((R_max - R_distance) / R_max + 1e-6) # (0, inf)
         T_max = T_distance.max(dim=1, keepdim=True)[0]

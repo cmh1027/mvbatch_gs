@@ -61,7 +61,6 @@ class ModelParams(ParamGroup):
         self.t_coef = 1.0
         self.r_coef = 1.0
         self.num_imgs = -1
-        self.log_batch = False
         self.init_scale = 0.1
         super().__init__(parser, "Loading Parameters", sentinel)
 
@@ -116,6 +115,8 @@ class OptimizationParams(ParamGroup):
 
         self.turn_off_print = False
         self.forced_exit = 1e+8
+        self.log_batch = False
+        self.log_batch_interval = 1
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

@@ -70,7 +70,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             n_rays = (dummy_cam.image_height * dummy_cam.image_width) 
     print(f"Image ({dummy_cam.image_height} x {dummy_cam.image_width} = {dummy_cam.image_height * dummy_cam.image_width}), n_rays : {n_rays}")
 
+    
     for iteration in range(first_iter, opt.iterations + 1): 
+        gt_images = []
         if iteration == opt.forced_exit:
             print("FORCED EXIT")
             exit(0)       
@@ -97,9 +99,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, strategy=opt.batch_sample_strategy)
 
         cams = [viewpoints[idx] for idx in cam_idxs]
-        aux_densify_grad = None
-        aux_densify = opt.aux_densify and iteration >= opt.aux_densify_from_iter
-
+        vis_ratios = []
         for idx, viewpoint_cam in enumerate(cams):
             bg = torch.rand((3), device="cuda") if opt.random_background else background
             if n_rays == (dummy_cam.image_height * dummy_cam.image_width):
@@ -108,17 +108,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 pmask[:] = 0
                 pmask[torch.randperm(len(pmask), device=torch.device('cuda'))[:n_rays]] = 1
 
-            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, mask=pmask, aux_densify=aux_densify)
+            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, mask=pmask)
             image = render_pkg["render"][:3, :]
             depth = render_pkg["depth"]
-            visibility_filter = render_pkg["visibility_filter"]
 
-            if opt.batch_size == 1 and opt.log_single_partial and iteration % opt.log_single_partial_interval == 0:
-                tb_writer.add_scalar('vis_ratio', visibility_filter.sum() / len(visibility_filter), iteration)
-                os.makedirs(os.path.join(dataset.model_path, "data/vis_mask"), exist_ok=True)
-                torch.save(visibility_filter.cpu(), os.path.join(dataset.model_path, "data/vis_mask", f"{'%05d' % iteration}.pt"))
             # Loss
             gt_image = viewpoint_cam.original_image.cuda()
+            gt_images += [gt_image.cpu()]
             if pmask is None:
                 loss_mask = None
             else:
@@ -132,20 +128,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 ssim_loss = 1 - ssim_map
                 loss += lambda_dssim * ssim_loss.mean()
 
-            if aux_densify:
-                R_u = render_pkg["aux_render"]
-                loss += (E_u.detach() * R_u).sum()
-                if lambda_dssim > 0:
-                    loss += (ssim_loss.detach() * R_u).sum()
-
             loss = loss / len(cams)
             loss.backward()
 
-        if aux_densify:
-            new_aux_densify_grad = gaussians._aux_scalar.grad.detach()[..., 0]
-            new_aux_densify_grad[new_aux_densify_grad < 0] = 0 
-            aux_densify_grad = new_aux_densify_grad if aux_densify_grad is None else torch.max(aux_densify_grad, new_aux_densify_grad)
-            gaussians._aux_scalar.grad = None
+        vis_ratios.append(((gaussians._opacity.grad != 0).sum() / len(gaussians._opacity)).item())
+        if iteration % 100 == 0:
+            visible_ratio = sum(vis_ratios) / len(vis_ratios)
+            tb_writer.add_scalar(f'train/vis_ratio', visible_ratio, iteration)
+            vis_ratios = []
+
 
         reg_loss = 0
         reg_loss += args.opacity_reg * torch.abs(gaussians.get_opacity).mean() 
@@ -175,8 +166,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.densify_until_iter and iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                 dead_mask = (gaussians.get_opacity <= 0.005).squeeze(-1)
                 gaussians.relocate_gs(dead_mask=dead_mask)
-                gaussians.add_new_gs(opt, cap_max=args.cap_max, aux_grad=aux_densify_grad, add_ratio=opt.add_ratio, iteration=iteration)
-                aux_densify_grad = None
+                gaussians.add_new_gs(opt, cap_max=args.cap_max, add_ratio=opt.add_ratio, iteration=iteration)
 
             if iteration % args.vis_iteration_interval == 0:
                 os.makedirs(os.path.join(dataset.model_path, "vis"), exist_ok=True)
@@ -189,11 +179,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     pred = torch.cat([image, apply_depth_colormap(depth.permute(1, 2, 0))], dim=-1)
                     gt = torch.cat([gt_image, apply_depth_colormap(gt_depth.permute(1, 2, 0))], dim=-1)
                     figs = [pred, gt]
-                    save_image(torch.cat(figs, dim=1), os.path.join(dataset.model_path, "vis/iter_{}.png".format(iteration)))
+                    save_image(torch.cat(figs, dim=1), os.path.join(dataset.model_path, f"vis/iter_{iteration}.png"))
+
+            if opt.log_batch and iteration % opt.log_batch_interval == 0:
+                os.makedirs(os.path.join(dataset.model_path, "batch"), exist_ok=True)
+                with torch.no_grad():
+                    save_image(torch.cat(gt_images, dim=1), os.path.join(dataset.model_path, f"batch/{'%05d' % iteration}.png"))
+
 
             # Optimizer step
             if iteration < opt.iterations:
-                torch.cuda.synchronize()
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
 
@@ -210,6 +205,27 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+
+        if opt.batch_size == 1 and opt.log_single_partial:
+            if iteration % opt.log_single_partial_interval == 0:
+                if opt.single_partial_rays_denom == 1:
+                    image = render(viewpoint_cam, gaussians, pipe, bg)["render"][:3, :]
+                    image.sum().backward()
+                    visible_count_base = (gaussians._opacity.grad != 0).sum()
+                    gaussians.optimizer.zero_grad(set_to_none = True)
+                    log_dict = {}
+                    for i in [2, 4, 8, 16, 32, 64, 128]:
+                        mask_temp = torch.zeros(dummy_cam.image_height*dummy_cam.image_width, dtype=torch.int32, device=torch.device('cuda'))
+                        mask_temp[torch.randperm(len(mask_temp), device=torch.device('cuda'))[:n_rays // i]] = 1
+                        image = render(viewpoint_cam, gaussians, pipe, bg, mask=mask_temp)["render"][:3, :]
+                        image.sum().backward()
+                        visible_count = (gaussians._opacity.grad != 0).sum()
+                        gaussians.optimizer.zero_grad(set_to_none = True)
+                        log_dict[str(i)] = (visible_count / visible_count_base).item()
+                    tb_writer.add_scalars(f'test/vis_ratio_over_1', log_dict, iteration)               
+
+
+
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
