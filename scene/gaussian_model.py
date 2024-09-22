@@ -51,7 +51,6 @@ class GaussianModel:
         self._scaling = torch.empty(0)
         self._rotation = torch.empty(0)
         self._opacity = torch.empty(0)
-        self._aux_scalar = torch.empty(0)
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
         self.denom = torch.empty(0)
@@ -69,7 +68,6 @@ class GaussianModel:
             self._scaling,
             self._rotation,
             self._opacity,
-            self._aux_scalar,
             self.max_radii2D,
             self.xyz_gradient_accum,
             self.denom,
@@ -85,7 +83,6 @@ class GaussianModel:
         self._scaling, 
         self._rotation, 
         self._opacity,
-        self._aux_scalar,
         self.max_radii2D, 
         xyz_gradient_accum, 
         denom,
@@ -118,10 +115,6 @@ class GaussianModel:
     def get_opacity(self):
         return self.opacity_activation(self._opacity)
     
-    @property
-    def get_aux_scalar(self):
-        return self._aux_scalar
-    
     def get_covariance(self, scaling_modifier = 1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
 
@@ -150,7 +143,6 @@ class GaussianModel:
         rots[:, 0] = 1
 
         opacities = inverse_sigmoid(0.5 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
-        aux_scalars = torch.zeros((fused_point_cloud.shape[0], 1), device="cuda")
 
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
         self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
@@ -158,7 +150,6 @@ class GaussianModel:
         self._scaling = nn.Parameter(scales.requires_grad_(True))
         self._rotation = nn.Parameter(rots.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
-        self._aux_scalar = nn.Parameter(aux_scalars.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
 
@@ -268,7 +259,6 @@ class GaussianModel:
         self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._aux_scalar = nn.Parameter(torch.tensor(np.zeros((xyz.shape[0], 2)), dtype=torch.float, device="cuda").requires_grad_(True))
 
         self.active_sh_degree = self.max_sh_degree
 
@@ -316,8 +306,6 @@ class GaussianModel:
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
 
-        self._aux_scalar = nn.Parameter(torch.zeros_like(self._opacity))
-
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
 
         self.denom = self.denom[valid_points_mask]
@@ -360,8 +348,6 @@ class GaussianModel:
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
-        
-        self._aux_scalar = nn.Parameter(torch.zeros_like(self._opacity))
 
         if reset_params:
             self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -401,8 +387,6 @@ class GaussianModel:
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"] 
-
-        self._aux_scalar = nn.Parameter(torch.zeros_like(self._opacity))
 
         return optimizable_tensors
 
@@ -458,7 +442,7 @@ class GaussianModel:
 
         self.replace_tensors_to_optimizer(inds=reinit_idx) 
         
-    def add_new_gs(self, opt, cap_max, aux_grad=None, add_ratio=0.05, iteration=None):
+    def add_new_gs(self, opt, cap_max, add_ratio=0.05, iteration=None):
         current_num_points = self._opacity.shape[0]
 
         target_num = min(cap_max, int((1+add_ratio) * current_num_points))
@@ -470,10 +454,6 @@ class GaussianModel:
         probs = self.get_opacity.squeeze(-1) 
         EPS = torch.finfo(torch.float32).eps
         probs = probs / (probs.sum() + EPS)
-        if aux_grad is not None:
-            probs[probs < EPS] = EPS
-            probs[aux_grad < opt.aux_densify_threshold] = EPS
-            probs = probs / (probs.sum() + EPS)
         
         add_idx, ratio = self._sample_alives(probs=probs, num=num_gs)
         (
@@ -490,21 +470,3 @@ class GaussianModel:
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, reset_params=False)
         self.replace_tensors_to_optimizer(inds=add_idx)
-
-    def grad_mean(self, visibility_count):
-        self._grad_mean(self._xyz, visibility_count)
-        self._grad_mean(self._features_dc, visibility_count)
-        self._grad_mean(self._features_rest, visibility_count)
-        self._grad_mean(self._scaling, visibility_count)
-        self._grad_mean(self._rotation, visibility_count)
-        self._grad_mean(self._opacity, visibility_count)
-        if self._aux_scalar.grad is not None:
-            self._grad_mean(self._aux_scalar, visibility_count)
-    
-    def _grad_mean(self, param, visibility_count):
-        if len(param.shape) == 2:
-            param.grad[visibility_count > 0] = param.grad[visibility_count > 0] / visibility_count[visibility_count > 0][..., None]
-        elif len(param.shape) == 3:
-            param.grad[visibility_count > 0] = param.grad[visibility_count > 0] / visibility_count[visibility_count > 0][..., None, None]
-        else:
-            raise NotImplementedError

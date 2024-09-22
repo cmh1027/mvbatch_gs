@@ -107,10 +107,6 @@ class OptimizationParams(ParamGroup):
         self.log_single_partial = False
         self.log_single_partial_interval = 100
 
-        self.aux_densify = False
-        self.aux_densify_threshold = 0.1
-        self.aux_densify_from_iter = 0
-
         self.add_ratio = 0.05
 
         self.turn_off_print = False

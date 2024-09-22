@@ -131,7 +131,14 @@ class Scene:
         if strategy == "min":
             indices = self.TR_min_prob[idx].multinomial(num_samples=N-1, replacement=False)
         elif strategy == "max":
-            indices = self.TR_max_prob[idx].multinomial(num_samples=N-1, replacement=False)
+            indices = []
+            distance_vector = self.TR_max_prob[idx].clone()
+            for _ in range(N-1):
+                index = distance_vector.multinomial(num_samples=1).squeeze()
+                indices += [index.item()]
+                distance_vector = torch.minimum(distance_vector, self.TR_max_prob[index])
+                distance_vector = distance_vector / distance_vector.sum()
+            indices = torch.tensor(indices)
         elif strategy == "random":
             indices = torch.randperm(self.TR_max_prob.shape[0])
             indices = indices[indices != idx][:N-1]

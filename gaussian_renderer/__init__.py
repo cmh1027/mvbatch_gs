@@ -13,11 +13,9 @@ import torch
 import math
 from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 from scene.gaussian_model import GaussianModel
-from aux_diff_gaussian_rasterization import GaussianRasterizationSettings as AuxGaussianRasterizationSettings
-from aux_diff_gaussian_rasterization import GaussianRasterizer as AuxGaussianRasterizer
 from utils.sh_utils import eval_sh
 
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, mask=None, aux_densify=False):
+def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, mask=None):
     """
     Render the scene. 
     
@@ -53,22 +51,6 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         mask=mask,
         debug=pipe.debug
     )
-    aux_raster_settings = AuxGaussianRasterizationSettings(
-        image_height=int(viewpoint_camera.image_height),
-        image_width=int(viewpoint_camera.image_width),
-        tanfovx=tanfovx,
-        tanfovy=tanfovy,
-        bg=bg_color,
-        scale_modifier=scaling_modifier,
-        viewmatrix=viewpoint_camera.world_view_transform,
-        projmatrix=viewpoint_camera.full_proj_transform,
-        sh_degree=pc.active_sh_degree,
-        campos=viewpoint_camera.camera_center,
-        prefiltered=False,
-        mask=mask,
-        debug=pipe.debug
-    )
-    aux_rasterizer = AuxGaussianRasterizer(raster_settings=aux_raster_settings)
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
 
@@ -118,18 +100,6 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
                     "visibility_filter" : radii > 0,
                     "radii": radii,
                     "depth": depth}
-    if aux_densify:
-        rendered_aux, _ = aux_rasterizer(
-            means3D = means3D.detach(),
-            means2D = means2D.detach(),
-            shs = None,
-            colors_precomp = pc.get_aux_scalar,
-            opacities = opacity.detach(),
-            scales = scales.detach(),
-            rotations = rotations.detach(),
-            cov3D_precomp = None
-        )
-        return_dict["aux_render"] = rendered_aux
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
     return return_dict
