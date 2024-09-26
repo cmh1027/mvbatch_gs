@@ -177,7 +177,11 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
-	bool prefiltered)
+	bool prefiltered,
+	const int* mask,
+	const bool aligned_mask,
+	const bool use_preprocess_mask,
+	const int window)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P)
@@ -198,6 +202,27 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float4 p_hom = transformPoint4x4(p_orig, projmatrix);
 	float p_w = 1.0f / (p_hom.w + 0.0000001f);
 	float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
+	float2 point_image = { ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H) };
+	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
+	uint32_t vertial_blocks = (H + BLOCK_Y - 1) / BLOCK_Y;
+	if(use_preprocess_mask){
+		assert(aligned_mask);
+		// check if point is not in masked tile 
+		uint block_x = point_image.x / BLOCK_X;
+		uint block_y = point_image.y / BLOCK_Y;
+		int inside = 0;
+		for(int i=-window; i<=window && !inside; ++i){
+			if(block_y+i < 0 || vertial_blocks <= block_y+i) continue;
+			for(int j=-window; j<=window && !inside; ++j){
+				if(block_x+j < 0 || horizontal_blocks <= block_x+j) continue;
+				inside |= (mask[(block_y+i) * horizontal_blocks + (block_x+j)] == 0);
+			}
+		}
+		if(!inside){
+			return;
+		}
+
+	}
 
 	// If 3D covariance matrix is precomputed, use it, otherwise compute
 	// from scaling and rotation parameters. 
@@ -230,7 +255,6 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float lambda1 = mid + sqrt(max(0.1f, mid * mid - det));
 	float lambda2 = mid - sqrt(max(0.1f, mid * mid - det));
 	float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
-	float2 point_image = { ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H) };
 	uint2 rect_min, rect_max;
 	getRect(point_image, my_radius, rect_min, rect_max, grid);
 	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
@@ -273,27 +297,35 @@ renderCUDA(
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
 	float* __restrict__ out_depth,
-	const int* __restrict__ mask)
+	const int* __restrict__ mask,
+	const bool aligned_mask)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
+	uint block_x = block.group_index().x;
+	uint block_y = block.group_index().y;
 	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
-	uint2 pix_min = { block.group_index().x * BLOCK_X, block.group_index().y * BLOCK_Y };
-	uint2 pix_max = { min(pix_min.x + BLOCK_X, W), min(pix_min.y + BLOCK_Y , H) };
+	uint32_t vertial_blocks = (H + BLOCK_Y - 1) / BLOCK_Y;
+
+	if(aligned_mask && mask[block_y * horizontal_blocks + block_x] == 0) {
+		return;
+	}
+
+	uint2 pix_min = { block_x * BLOCK_X, block_y * BLOCK_Y };
 	uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
 	uint32_t pix_id = W * pix.y + pix.x;
 	float2 pixf = { (float)pix.x, (float)pix.y };
 
 	// Check if this thread is associated with a valid pixel or outside.
 	bool inside = pix.x < W && pix.y < H;
-	if(inside){
+	if(inside && !aligned_mask){
 		inside = inside && mask[pix_id];
 	}
 	// Done threads can help with fetching, but don't rasterize
 	bool done = !inside;
 
 	// Load start/end range of IDs to process in bit sorted list.
-	uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
+	uint2 range = ranges[block_y * horizontal_blocks + block_x];
 	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
 	int toDo = range.y - range.x;
 
@@ -396,7 +428,8 @@ void FORWARD::render(
 	const float* bg_color,
 	float* out_color,
 	float* out_depth,
-	const int* mask)
+	const int* mask,
+	const bool aligned_mask)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -411,7 +444,8 @@ void FORWARD::render(
 		bg_color,
 		out_color,
 		out_depth,
-		mask);
+		mask,
+		aligned_mask);
 }
 
 void FORWARD::preprocess(int P, int D, int M,
@@ -438,7 +472,11 @@ void FORWARD::preprocess(int P, int D, int M,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
-	bool prefiltered)
+	bool prefiltered,
+	const int* mask,
+	const bool aligned_mask,
+	const bool use_preprocess_mask,
+	int window)
 {
 	preprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
 		P, D, M,
@@ -465,6 +503,10 @@ void FORWARD::preprocess(int P, int D, int M,
 		conic_opacity,
 		grid,
 		tiles_touched,
-		prefiltered
-		);
+		prefiltered,
+		mask,
+		aligned_mask,
+		use_preprocess_mask,
+		window
+	);
 }

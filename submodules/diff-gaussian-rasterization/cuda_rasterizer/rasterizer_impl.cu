@@ -219,6 +219,9 @@ int CudaRasterizer::Rasterizer::forward(
 	float* out_depth,
 	int* radii,
 	const int* mask,
+	const bool aligned_mask,
+	bool use_mask,
+	const int window,
 	bool debug)
 {
 	const float focal_y = height / (2.0f * tan_fovy);
@@ -271,7 +274,11 @@ int CudaRasterizer::Rasterizer::forward(
 		geomState.conic_opacity,
 		tile_grid,
 		geomState.tiles_touched,
-		prefiltered
+		prefiltered,
+		mask,
+		aligned_mask,
+		use_mask,
+		window
 	), debug)
 
 	// Compute prefix sum over full list of touched tile counts by Gaussians
@@ -335,7 +342,8 @@ int CudaRasterizer::Rasterizer::forward(
 		background,
 		out_color,
 		out_depth,
-		mask), debug)
+		mask,
+		aligned_mask), debug)
 
 	return num_rendered;
 }
@@ -374,6 +382,7 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dscale,
 	float* dL_drot,
 	const int* mask,
+	const bool aligned_mask,
 	bool debug)
 {
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
@@ -416,7 +425,8 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dopacity,
 		dL_dcolor,
 		dL_ddepth,
-		mask), debug)
+		mask,
+		aligned_mask), debug)
 
 	// Take care of the rest of preprocessing. Was the precomputed covariance
 	// given to us or a scales/rot pair? If precomputed, pass that. If not,

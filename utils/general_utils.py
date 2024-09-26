@@ -134,3 +134,10 @@ def safe_state(silent):
     torch.cuda.set_device(torch.device("cuda:0"))
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+
+def mask_schedule(opt, iteration):
+    if not opt.use_preprocess_mask:
+        return False
+    else:
+        if opt.preprocess_mask_start < iteration:
+            return True

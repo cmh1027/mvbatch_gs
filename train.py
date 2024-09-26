@@ -17,7 +17,7 @@ from utils.loss_utils import l1_loss, ssim
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
-from utils.general_utils import safe_state
+from utils.general_utils import safe_state, mask_schedule
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr, rescale_gt_depth, apply_depth_colormap
@@ -34,7 +34,7 @@ except ImportError:
 from render import render_sets
 from metrics import evaluate
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, forced_exit):
     if dataset.cap_max == -1:
         print("Please specify the maximum number of Gaussians using --cap_max.")
         exit()
@@ -60,20 +60,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     print(f"BATCH SIZE : {opt.batch_size}")
 
     dummy_cam = scene.getTrainCameras()[0]
-    pmask = torch.zeros(dummy_cam.image_height*dummy_cam.image_width, dtype=torch.int32, device=torch.device('cuda'))
+    H, W = dummy_cam.image_height, dummy_cam.image_width
     if opt.batch_size == 1 and opt.single_partial_rays:
-        n_rays = (dummy_cam.image_height * dummy_cam.image_width) // opt.single_partial_rays_denom
+        n_rays = (H * W) // opt.single_partial_rays_denom
     else:
         if opt.batch_partition:
-            n_rays = (dummy_cam.image_height * dummy_cam.image_width) // opt.batch_size
+            n_rays = (H * W) // opt.batch_size
         else:
-            n_rays = (dummy_cam.image_height * dummy_cam.image_width) 
-    print(f"Image ({dummy_cam.image_height} x {dummy_cam.image_width} = {dummy_cam.image_height * dummy_cam.image_width}), n_rays : {n_rays}")
+            n_rays = (H * W) 
+    print(f"Image ({H} x {W} = {H * W}), n_rays : {n_rays}")
 
     
     for iteration in range(first_iter, opt.iterations + 1): 
         gt_images = []
-        if iteration == opt.forced_exit:
+        if iteration == forced_exit:
             print("FORCED EXIT")
             exit(0)       
         xyz_lr = gaussians.update_learning_rate(iteration)
@@ -98,19 +98,29 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         else:
             cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, strategy=opt.batch_sample_strategy)
 
-        cams = [viewpoints[idx] for idx in cam_idxs]
+        cams = [viewpoints[min(idx, len(viewpoints)-1)] for idx in cam_idxs]
         vis_ratios = []
+        use_preprocess_mask = mask_schedule(opt, iteration)
         for idx, viewpoint_cam in enumerate(cams):
             bg = torch.rand((3), device="cuda") if opt.random_background else background
-            if n_rays == (dummy_cam.image_height * dummy_cam.image_width):
+            if n_rays == (H * W):
                 pmask = None
             else:
-                pmask[:] = 0
-                pmask[torch.randperm(len(pmask), device=torch.device('cuda'))[:n_rays]] = 1
+                if opt.mask_grid:
+                    partial_n_rays = n_rays // (opt.mask_width * opt.mask_height)
+                    partial_height = (H + opt.mask_height - 1) // opt.mask_height
+                    partial_width = (W + opt.mask_width - 1) // opt.mask_height
+                    pmask = torch.zeros(partial_height*partial_width, dtype=torch.int32, device=torch.device('cuda'))
+                    pmask[torch.randperm(len(pmask), device=torch.device('cuda'))[:partial_n_rays]] = 1
+                    pmask = pmask.view(partial_height, partial_width)
+                else:
+                    pmask = torch.zeros(H*W, dtype=torch.int32, device=torch.device('cuda'))
+                    pmask[torch.randperm(len(pmask), device=torch.device('cuda'))[:n_rays]] = 1
 
-            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, mask=pmask)
+            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, mask=pmask, aligned_mask=opt.mask_grid)
             image = render_pkg["render"][:3, :]
             depth = render_pkg["depth"]
+            
 
             # Loss
             gt_image = viewpoint_cam.original_image.cuda()
@@ -118,7 +128,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if pmask is None:
                 loss_mask = None
             else:
-                loss_mask = pmask.reshape(image.shape[1:]).to(torch.float)
+                if opt.mask_grid:
+                    loss_mask = torch.zeros(H, W, device=torch.device('cuda'))
+                    pmask_expand = torch.kron(pmask, torch.ones(opt.mask_height, opt.mask_width, device=torch.device('cuda')))
+                    loss_mask[:, :] = pmask_expand[:H, :W]
+                else:
+                    loss_mask = pmask.view(H, W).to(torch.float)
+
 
             E_u, Ll1 = l1_loss(image, gt_image, mask=loss_mask)
             lambda_dssim = opt.lambda_dssim
@@ -215,7 +231,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     gaussians.optimizer.zero_grad(set_to_none = True)
                     log_dict = {}
                     for i in [2, 4, 8, 16, 32, 64, 128]:
-                        mask_temp = torch.zeros(dummy_cam.image_height*dummy_cam.image_width, dtype=torch.int32, device=torch.device('cuda'))
+                        mask_temp = torch.zeros(H*W, dtype=torch.int32, device=torch.device('cuda'))
                         mask_temp[torch.randperm(len(mask_temp), device=torch.device('cuda'))[:n_rays // i]] = 1
                         image = render(viewpoint_cam, gaussians, pipe, bg, mask=mask_temp)["render"][:3, :]
                         image.sum().backward()
@@ -299,6 +315,7 @@ if __name__ == "__main__":
     parser.add_argument("--vis_iteration_interval", "-vi", type=int, default=500)
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
+    parser.add_argument("--forced_exit", type=int)
     args = parser.parse_args(sys.argv[1:])
     if args.test_iteration_interval is not None:
         args.test_iterations = list(range(args.test_iteration_interval, 30001, args.test_iteration_interval))
@@ -319,10 +336,11 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     # network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.forced_exit)
 
     # All done
     
     # print("\nTraining complete.")
-    render_sets(lp.extract(args), op.iterations, pp.extract(args), True, False)
-    evaluate([args.model_path])
+    if args.forced_exit is not None:
+        render_sets(lp.extract(args), op.iterations, pp.extract(args), True, False)
+        evaluate([args.model_path])

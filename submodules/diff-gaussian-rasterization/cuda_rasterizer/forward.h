@@ -45,7 +45,12 @@ namespace FORWARD
 		float4* conic_opacity,
 		const dim3 grid,
 		uint32_t* tiles_touched,
-		bool prefiltered);
+		bool prefiltered,
+		const int* mask,
+		const bool aligned_mask,
+		const bool use_mask,
+		const int window
+	);
 
 	// Main rasterization method.
 	void render(
@@ -62,7 +67,8 @@ namespace FORWARD
 		const float* bg_color,
 		float* out_color,
 		float* out_depth,
-		const int* mask);
+		const int* mask,
+		const bool aligned_mask);
 }
 
 

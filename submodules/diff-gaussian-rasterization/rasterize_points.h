@@ -36,6 +36,9 @@ RasterizeGaussiansCUDA(
 	const torch::Tensor& campos,
 	const bool prefiltered,
 	const torch::Tensor& mask,
+	const bool aligned_mask,
+	const bool use_preprocess_mask,
+	const int window,
 	const bool debug);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -62,6 +65,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
 	const torch::Tensor& mask,
+	const bool aligned_mask,
 	const bool debug);
 		
 torch::Tensor markVisible(

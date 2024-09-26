@@ -101,6 +101,11 @@ class OptimizationParams(ParamGroup):
         self.batch_size = 1
         self.batch_until = 30000
         self.batch_partition = False
+        self.mask_grid = False
+        self.mask_height = 8
+        self.mask_width = 8
+        self.use_preprocess_mask = False
+        self.preprocess_mask_start = 3000
         
         self.single_partial_rays = False
         self.single_partial_rays_denom = 1
@@ -110,7 +115,6 @@ class OptimizationParams(ParamGroup):
         self.add_ratio = 0.05
 
         self.turn_off_print = False
-        self.forced_exit = 1e+8
         self.log_batch = False
         self.log_batch_interval = 1
         super().__init__(parser, "Optimization Parameters")

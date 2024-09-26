@@ -432,12 +432,19 @@ renderCUDA(
 	float* __restrict__ dL_dopacity,
 	float* __restrict__ dL_dcolors,
 	float* __restrict__ dL_ddepths,
-	const int* __restrict__ mask)
+	const int* __restrict__ mask,
+	const bool aligned_mask)
 {
-	// We rasterize again. Compute necessary block info.
+
 	auto block = cg::this_thread_block();
-	const uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
-	const uint2 pix_min = { block.group_index().x * BLOCK_X, block.group_index().y * BLOCK_Y };
+	uint block_x = block.group_index().x;
+	uint block_y = block.group_index().y;
+	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
+	uint32_t vertial_blocks = (H + BLOCK_Y - 1) / BLOCK_Y;
+
+	if(aligned_mask && mask[block_y * horizontal_blocks + block_x] == 0) return;
+
+	const uint2 pix_min = { block_x * BLOCK_X, block_y * BLOCK_Y };
 	const uint2 pix_max = { min(pix_min.x + BLOCK_X, W), min(pix_min.y + BLOCK_Y , H) };
 	const uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
 	const uint32_t pix_id = W * pix.y + pix.x;
@@ -445,10 +452,10 @@ renderCUDA(
 
 	// Check if this thread is associated with a valid pixel or outside.
 	bool inside = pix.x < W && pix.y < H;
-	if(inside){
+	if(inside && !aligned_mask){
 		inside = inside && mask[pix_id];
 	}
-	const uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
+	const uint2 range = ranges[block_y * horizontal_blocks + block_x];
 
 	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
 	// Done threads can help with fetching, but don't rasterize
@@ -681,7 +688,8 @@ void BACKWARD::render(
 	float* dL_dopacity,
 	float* dL_dcolors,
 	float* dL_ddepths,
-	const int* mask)
+	const int* mask,
+	const bool aligned_mask)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
 		ranges,
@@ -701,6 +709,7 @@ void BACKWARD::render(
 		dL_dopacity,
 		dL_dcolors,
 		dL_ddepths,
-		mask
-		);
+		mask,
+		aligned_mask
+	);
 }
