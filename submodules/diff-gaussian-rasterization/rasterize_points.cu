@@ -163,7 +163,7 @@ RasterizeGaussiansBackwardCUDA(
 	}
 
 	torch::Tensor dL_dmeans3D = torch::zeros({P, 3}, means3D.options());
-	torch::Tensor dL_dmeans2D = torch::zeros({P, 3}, means3D.options());
+	torch::Tensor dL_dmeans2D = torch::zeros({P, 4}, means3D.options());
 	torch::Tensor dL_dcolors = torch::zeros({P, NUM_CHANNELS}, means3D.options());
 	torch::Tensor dL_ddepths = torch::zeros({P, 1}, means3D.options());
 	torch::Tensor dL_dconic = torch::zeros({P, 2, 2}, means3D.options());

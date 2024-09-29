@@ -93,6 +93,17 @@ class OptimizationParams(ParamGroup):
         self.densify_from_iter = 500
         self.densify_until_iter = 25_000
         self.random_background = False
+
+        
+
+        ### 3dgs ###
+        self.opacity_reset_interval = 3000
+        self.opacity_reset_threshold = 0.01
+        self.densify_grad_threshold = 0.0002
+        self.densify_grad_abs_threshold = 0.0008
+        self.max_points = 6_000_000
+
+        ### 3dgs-mcmc ###
         self.noise_lr = 5e5
         self.scale_reg = 0.01
         self.opacity_reg = 0.01
@@ -119,6 +130,7 @@ class OptimizationParams(ParamGroup):
         self.log_batch_interval = 1
 
         self.evaluate_time = False
+        self.gs_type = "mcmc" # ["original", "3dgs"]
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

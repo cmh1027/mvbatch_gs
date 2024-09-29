@@ -105,6 +105,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         cams = [viewpoints[min(idx, len(viewpoints)-1)] for idx in cam_idxs]
         vis_ratios = []
         use_preprocess_mask = mask_schedule(opt, iteration)
+
+        if opt.gs_type == "original":
+            batch_vs = []
+            batch_radii = torch.zeros_like(gaussians.get_opacity[..., 0], dtype=torch.int32)
+            visibility_count = torch.zeros_like(gaussians.get_opacity[..., 0], dtype=torch.uint8)
+
         for idx, viewpoint_cam in enumerate(cams):
             bg = torch.rand((3), device="cuda") if opt.random_background else background
             if n_rays == (H * W):
@@ -122,9 +128,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     pmask[torch.randperm(len(pmask), device=torch.device('cuda'))[:n_rays]] = 1
 
             render_pkg = render(viewpoint_cam, gaussians, pipe, bg, mask=pmask, aligned_mask=opt.mask_grid, use_preprocess_mask=use_preprocess_mask)
-            image = render_pkg["render"][:3, :]
-            depth = render_pkg["depth"]
-            
+            (image, depth, viewspace_point_tensor, visibility_filter, radii) = (
+                render_pkg["render"][:3, ...], 
+                render_pkg["depth"],
+                render_pkg["viewspace_points"], 
+                render_pkg["visibility_filter"], 
+                render_pkg["radii"]
+            )
+            if opt.gs_type == "original":
+                visibility_count = visibility_count + visibility_filter.to(visibility_count.dtype)
+                batch_vs += [viewspace_point_tensor]
+                batch_radii = torch.maximum(radii, batch_radii)
 
             # Loss
             gt_image = viewpoint_cam.original_image.cuda()
@@ -139,7 +153,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 else:
                     loss_mask = pmask.view(H, W).to(torch.float)
 
-
             E_u, Ll1 = l1_loss(image, gt_image, mask=loss_mask)
             lambda_dssim = opt.lambda_dssim
             loss = (1.0 - lambda_dssim) * Ll1
@@ -147,9 +160,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 ssim_map = ssim(image, gt_image, mask=loss_mask)
                 ssim_loss = 1 - ssim_map
                 loss += lambda_dssim * ssim_loss.mean()
-
             loss = loss / len(cams)
             loss.backward()
+
         if not opt.evaluate_time:
             vis_ratios.append(((gaussians._opacity.grad != 0).sum() / len(gaussians._opacity)).item())
             if iteration % 100 == 0:
@@ -157,11 +170,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 tb_writer.add_scalar(f'train/vis_ratio', visible_ratio, iteration)
                 vis_ratios = []
 
-
-        reg_loss = 0
-        reg_loss += args.opacity_reg * torch.abs(gaussians.get_opacity).mean() 
-        reg_loss += args.scale_reg * torch.abs(gaussians.get_scaling).mean() 
-        reg_loss.backward()
+        if opt.gs_type == "mcmc":
+            reg_loss = 0
+            reg_loss += args.opacity_reg * torch.abs(gaussians.get_opacity).mean() 
+            reg_loss += args.scale_reg * torch.abs(gaussians.get_scaling).mean() 
+            reg_loss.backward()
         
         with torch.no_grad():
             # Progress bar
@@ -180,13 +193,35 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Log and save
             if not opt.evaluate_time:
                 training_report(opt, tb_writer, iteration, Ll1, loss, l1_loss, testing_iterations, scene, render, (pipe, background))
+
             if (iteration in saving_iterations and not opt.evaluate_time):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
-            if iteration < opt.densify_until_iter and iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                dead_mask = (gaussians.get_opacity <= 0.005).squeeze(-1)
-                gaussians.relocate_gs(dead_mask=dead_mask)
-                gaussians.add_new_gs(opt, cap_max=args.cap_max, add_ratio=opt.add_ratio, iteration=iteration)
+
+            if iteration < opt.densify_until_iter:
+                if opt.gs_type == "original":
+                    mask = visibility_count > 0
+                    gaussians.max_radii2D[mask] = torch.max(gaussians.max_radii2D[mask], batch_radii[mask])
+                    batch_vs = torch.stack([t.grad for t in batch_vs], dim=0) # (B, N, 4)
+                    vs = batch_vs[..., 0:2].norm(dim=-1, keepdim=True).max(dim=0).values # (N,1)
+                    vs_abs = batch_vs[..., 2:4].norm(dim=-1, keepdim=True).max(dim=0).values
+                    gaussians.add_densification_stats(vs, vs_abs, mask)
+                    
+                    if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                        size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                        gaussians.densify_and_prune(opt, opt.opacity_reset_threshold / 2, scene.cameras_extent, size_threshold, iteration)
+                    
+                    if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
+                        gaussians.reset_opacity(opt.opacity_reset_threshold)
+
+                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                    if opt.gs_type == "original":
+                        size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                        gaussians.densify_and_prune(opt, opt.opacity_reset_threshold / 2, scene.cameras_extent, size_threshold, iteration)
+                    elif opt.gs_type == "mcmc":
+                        dead_mask = (gaussians.get_opacity <= 0.005).squeeze(-1)
+                        gaussians.relocate_gs(dead_mask=dead_mask)
+                        gaussians.add_new_gs(opt, cap_max=args.cap_max, add_ratio=opt.add_ratio, iteration=iteration)
 
             if iteration % args.vis_iteration_interval == 0 and not opt.evaluate_time:
                 os.makedirs(os.path.join(dataset.model_path, "vis"), exist_ok=True)
@@ -206,21 +241,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 with torch.no_grad():
                     save_image(torch.cat(gt_images, dim=1), os.path.join(dataset.model_path, f"batch/{'%05d' % iteration}.png"))
 
-
             # Optimizer step
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
+                if opt.gs_type == "mcmc":
+                    L = build_scaling_rotation(gaussians.get_scaling, gaussians.get_rotation)
+                    actual_covariance = L @ L.transpose(1, 2)
 
-                L = build_scaling_rotation(gaussians.get_scaling, gaussians.get_rotation)
-                actual_covariance = L @ L.transpose(1, 2)
-
-                def op_sigmoid(x, k=100, x0=0.995):
-                    return 1 / (1 + torch.exp(-k * (x - x0)))
-                
-                noise = torch.randn_like(gaussians._xyz) * (op_sigmoid(1- gaussians.get_opacity))*args.noise_lr*xyz_lr
-                noise = torch.bmm(actual_covariance, noise.unsqueeze(-1)).squeeze(-1)
-                gaussians._xyz.add_(noise)
+                    def op_sigmoid(x, k=100, x0=0.995):
+                        return 1 / (1 + torch.exp(-k * (x - x0)))
+                    
+                    noise = torch.randn_like(gaussians._xyz) * (op_sigmoid(1- gaussians.get_opacity))*args.noise_lr*xyz_lr
+                    noise = torch.bmm(actual_covariance, noise.unsqueeze(-1)).squeeze(-1)
+                    gaussians._xyz.add_(noise)
 
             if (iteration in checkpoint_iterations) and not opt.evaluate_time:
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
