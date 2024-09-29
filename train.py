@@ -37,6 +37,9 @@ from datetime import timedelta
 import time
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, forced_exit):
+    if opt.gs_type == "original":
+        dataset.init_scale = 1
+    
     if dataset.cap_max == -1:
         print("Please specify the maximum number of Gaussians using --cap_max.")
         exit()
