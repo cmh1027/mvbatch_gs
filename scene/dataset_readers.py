@@ -180,13 +180,10 @@ def readColmapSceneInfo(path, images, args, llffhold=8):
 def read_sfm_pcd(root):
     ply_path = os.path.join(root, "sparse/0/points3D.ply")
     bin_path = os.path.join(root, "sparse/0/points3D.bin")
-    txt_path = os.path.join(root, "sparse/0/points3D.txt")
     if not os.path.exists(ply_path):
         print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
-        try:
-            xyz, rgb, _ = read_points3D_binary(bin_path)
-        except:
-            xyz, rgb, _ = read_points3D_text(txt_path)
+        xyz, rgb, _ = read_points3D_binary(bin_path)
+        storePly(ply_path, xyz, rgb)
     pcd = fetchPly(ply_path)
     return pcd, ply_path
 

@@ -55,7 +55,7 @@ class ModelParams(ParamGroup):
         self.data_device = "cuda"
         self.eval = True
         self.cap_max = -1
-        self.init_type = "random"
+        self.init_type = "sfm"
         self.radius_mult = 3.0
         self.num_points = 100000
         self.t_coef = 1.0
@@ -102,10 +102,10 @@ class OptimizationParams(ParamGroup):
         self.batch_until = 30000
         self.batch_partition = False
         self.mask_grid = False
-        self.mask_height = 8
-        self.mask_width = 8
+        self.mask_height = 16
+        self.mask_width = 16
         self.use_preprocess_mask = False
-        self.preprocess_mask_start = 3000
+        self.preprocess_mask_start = 0
         
         self.single_partial_rays = False
         self.single_partial_rays_denom = 1
@@ -117,6 +117,8 @@ class OptimizationParams(ParamGroup):
         self.turn_off_print = False
         self.log_batch = False
         self.log_batch_interval = 1
+
+        self.evaluate_time = False
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

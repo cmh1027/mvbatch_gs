@@ -139,5 +139,7 @@ def mask_schedule(opt, iteration):
     if not opt.use_preprocess_mask:
         return False
     else:
-        if opt.preprocess_mask_start < iteration:
+        if opt.preprocess_mask_start == iteration:
+            print(f"Turn on preprocess mask on {iteration}")
+        if opt.preprocess_mask_start <= iteration:
             return True

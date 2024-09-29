@@ -33,6 +33,8 @@ except ImportError:
     TENSORBOARD_FOUND = False
 from render import render_sets
 from metrics import evaluate
+from datetime import timedelta
+import time
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, forced_exit):
     if dataset.cap_max == -1:
@@ -69,13 +71,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         else:
             n_rays = (H * W) 
     print(f"Image ({H} x {W} = {H * W}), n_rays : {n_rays}")
+    if opt.mask_grid:
+        print(f"tile size {opt.mask_height} x {opt.mask_width}")
 
-    
+    start_time = time.time()
     for iteration in range(first_iter, opt.iterations + 1): 
         gt_images = []
         if iteration == forced_exit:
             print("FORCED EXIT")
-            exit(0)       
+            break   
         xyz_lr = gaussians.update_learning_rate(iteration)
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
@@ -109,7 +113,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if opt.mask_grid:
                     partial_n_rays = n_rays // (opt.mask_width * opt.mask_height)
                     partial_height = (H + opt.mask_height - 1) // opt.mask_height
-                    partial_width = (W + opt.mask_width - 1) // opt.mask_height
+                    partial_width = (W + opt.mask_width - 1) // opt.mask_width
                     pmask = torch.zeros(partial_height*partial_width, dtype=torch.int32, device=torch.device('cuda'))
                     pmask[torch.randperm(len(pmask), device=torch.device('cuda'))[:partial_n_rays]] = 1
                     pmask = pmask.view(partial_height, partial_width)
@@ -117,7 +121,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     pmask = torch.zeros(H*W, dtype=torch.int32, device=torch.device('cuda'))
                     pmask[torch.randperm(len(pmask), device=torch.device('cuda'))[:n_rays]] = 1
 
-            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, mask=pmask, aligned_mask=opt.mask_grid)
+            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, mask=pmask, aligned_mask=opt.mask_grid, use_preprocess_mask=use_preprocess_mask)
             image = render_pkg["render"][:3, :]
             depth = render_pkg["depth"]
             
@@ -146,12 +150,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             loss = loss / len(cams)
             loss.backward()
-
-        vis_ratios.append(((gaussians._opacity.grad != 0).sum() / len(gaussians._opacity)).item())
-        if iteration % 100 == 0:
-            visible_ratio = sum(vis_ratios) / len(vis_ratios)
-            tb_writer.add_scalar(f'train/vis_ratio', visible_ratio, iteration)
-            vis_ratios = []
+        if not opt.evaluate_time:
+            vis_ratios.append(((gaussians._opacity.grad != 0).sum() / len(gaussians._opacity)).item())
+            if iteration % 100 == 0:
+                visible_ratio = sum(vis_ratios) / len(vis_ratios)
+                tb_writer.add_scalar(f'train/vis_ratio', visible_ratio, iteration)
+                vis_ratios = []
 
 
         reg_loss = 0
@@ -174,9 +178,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration == opt.iterations:
                 progress_bar.close()
             # Log and save
-            
-            training_report(opt, tb_writer, iteration, Ll1, loss, l1_loss, testing_iterations, scene, render, (pipe, background))
-            if (iteration in saving_iterations):
+            if not opt.evaluate_time:
+                training_report(opt, tb_writer, iteration, Ll1, loss, l1_loss, testing_iterations, scene, render, (pipe, background))
+            if (iteration in saving_iterations and not opt.evaluate_time):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
             if iteration < opt.densify_until_iter and iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
@@ -184,7 +188,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.relocate_gs(dead_mask=dead_mask)
                 gaussians.add_new_gs(opt, cap_max=args.cap_max, add_ratio=opt.add_ratio, iteration=iteration)
 
-            if iteration % args.vis_iteration_interval == 0:
+            if iteration % args.vis_iteration_interval == 0 and not opt.evaluate_time:
                 os.makedirs(os.path.join(dataset.model_path, "vis"), exist_ok=True)
                 with torch.no_grad():
                     render_pkg = render(viewpoints[cam_idx], gaussians, pipe, bg)
@@ -197,7 +201,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     figs = [pred, gt]
                     save_image(torch.cat(figs, dim=1), os.path.join(dataset.model_path, f"vis/iter_{iteration}.png"))
 
-            if opt.log_batch and iteration % opt.log_batch_interval == 0:
+            if opt.log_batch and iteration % opt.log_batch_interval == 0 and not opt.evaluate_time:
                 os.makedirs(os.path.join(dataset.model_path, "batch"), exist_ok=True)
                 with torch.no_grad():
                     save_image(torch.cat(gt_images, dim=1), os.path.join(dataset.model_path, f"batch/{'%05d' % iteration}.png"))
@@ -218,11 +222,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 noise = torch.bmm(actual_covariance, noise.unsqueeze(-1)).squeeze(-1)
                 gaussians._xyz.add_(noise)
 
-            if (iteration in checkpoint_iterations):
+            if (iteration in checkpoint_iterations) and not opt.evaluate_time:
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 
-        if opt.batch_size == 1 and opt.log_single_partial:
+        if opt.batch_size == 1 and opt.log_single_partial and not opt.evaluate_time:
             if iteration % opt.log_single_partial_interval == 0:
                 if opt.single_partial_rays_denom == 1:
                     image = render(viewpoint_cam, gaussians, pipe, bg)["render"][:3, :]
@@ -240,8 +244,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         log_dict[str(i)] = (visible_count / visible_count_base).item()
                     tb_writer.add_scalars(f'test/vis_ratio_over_1', log_dict, iteration)               
 
-
-
+    end_time = time.time()
+    if forced_exit is None:
+        print("\n[ITER {}] Saving Gaussians".format(iteration))
+        scene.save(iteration)
+    if opt.evaluate_time:
+        elasped_sec = end_time - start_time
+        with open(os.path.join(dataset.model_path, "elapsed.txt"), "w") as f:
+            f.write(str(timedelta(seconds=elasped_sec)))
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
@@ -316,6 +326,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     parser.add_argument("--forced_exit", type=int)
+    parser.add_argument("--render_iter", type=int)
     args = parser.parse_args(sys.argv[1:])
     if args.test_iteration_interval is not None:
         args.test_iterations = list(range(args.test_iteration_interval, 30001, args.test_iteration_interval))
@@ -341,6 +352,7 @@ if __name__ == "__main__":
     # All done
     
     # print("\nTraining complete.")
-    if args.forced_exit is not None:
-        render_sets(lp.extract(args), op.iterations, pp.extract(args), True, False)
+    render_iter = op.iterations if args.render_iter is None else args.render_iter
+    if args.forced_exit is None:
+        render_sets(lp.extract(args), render_iter, pp.extract(args), True, False)
         evaluate([args.model_path])

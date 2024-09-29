@@ -279,7 +279,7 @@ int CudaRasterizer::Rasterizer::forward(
 		aligned_mask,
 		use_mask,
 		window
-	), debug)
+	), 1)
 
 	// Compute prefix sum over full list of touched tile counts by Gaussians
 	// E.g., [2, 3, 0, 2, 1] -> [2, 5, 5, 7, 8]
@@ -343,7 +343,7 @@ int CudaRasterizer::Rasterizer::forward(
 		out_color,
 		out_depth,
 		mask,
-		aligned_mask), debug)
+		aligned_mask), 1)
 
 	return num_rendered;
 }

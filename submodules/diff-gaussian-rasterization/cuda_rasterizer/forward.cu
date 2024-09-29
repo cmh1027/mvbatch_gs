@@ -205,24 +205,6 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float2 point_image = { ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H) };
 	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
 	uint32_t vertial_blocks = (H + BLOCK_Y - 1) / BLOCK_Y;
-	if(use_preprocess_mask){
-		assert(aligned_mask);
-		// check if point is not in masked tile 
-		uint block_x = point_image.x / BLOCK_X;
-		uint block_y = point_image.y / BLOCK_Y;
-		int inside = 0;
-		for(int i=-window; i<=window && !inside; ++i){
-			if(block_y+i < 0 || vertial_blocks <= block_y+i) continue;
-			for(int j=-window; j<=window && !inside; ++j){
-				if(block_x+j < 0 || horizontal_blocks <= block_x+j) continue;
-				inside |= (mask[(block_y+i) * horizontal_blocks + (block_x+j)] == 0);
-			}
-		}
-		if(!inside){
-			return;
-		}
-
-	}
 
 	// If 3D covariance matrix is precomputed, use it, otherwise compute
 	// from scaling and rotation parameters. 
@@ -257,8 +239,24 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
 	uint2 rect_min, rect_max;
 	getRect(point_image, my_radius, rect_min, rect_max, grid);
-	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
+	auto tiles = (rect_max.x - rect_min.x) * (rect_max.y - rect_min.y);
+	if (tiles == 0)
 		return;
+
+	if(use_preprocess_mask && -1 < p_proj.x && p_proj.x < 1 && -1 < p_proj.y && p_proj.y < 1){
+		assert(aligned_mask);
+		if(tiles < 9){
+			bool unmasked = false;
+			for(int b_x=rect_min.x; b_x<rect_max.x && !unmasked; ++b_x){
+				for(int b_y=rect_min.y; b_y<rect_max.y && !unmasked; ++b_y){
+					if(mask[b_y * horizontal_blocks + b_x]){
+						unmasked = true;
+					}
+				}
+			}
+			if(!unmasked) return;
+		}
+	}
 
 	// If colors have been precomputed, use them, otherwise convert
 	// spherical harmonics coefficients to RGB color.
@@ -305,7 +303,7 @@ renderCUDA(
 	uint block_x = block.group_index().x;
 	uint block_y = block.group_index().y;
 	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
-	uint32_t vertial_blocks = (H + BLOCK_Y - 1) / BLOCK_Y;
+	uint32_t vertical_blocks = (H + BLOCK_Y - 1) / BLOCK_Y;
 
 	if(aligned_mask && mask[block_y * horizontal_blocks + block_x] == 0) {
 		return;
