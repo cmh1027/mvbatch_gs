@@ -14,7 +14,8 @@ import sys
 import os
 
 class GroupParams:
-    pass
+    def __init__(self):
+        self.attr_save = {}
 
 class ParamGroup:
     def __init__(self, parser: ArgumentParser, name : str, fill_none = False):
@@ -36,12 +37,13 @@ class ParamGroup:
                     group.add_argument("--" + key, default=value, action="store_true")
                 else:
                     group.add_argument("--" + key, default=value, type=t)
-
+        
     def extract(self, args):
         group = GroupParams()
         for arg in vars(args).items():
             if arg[0] in vars(self) or ("_" + arg[0]) in vars(self):
                 setattr(group, arg[0], arg[1])
+                group.attr_save[arg[0]] = arg[1]
         return group
 
 class ModelParams(ParamGroup): 

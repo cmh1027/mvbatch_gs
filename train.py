@@ -304,6 +304,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         elasped_sec = end_time - start_time
         with open(os.path.join(dataset.model_path, "elapsed.txt"), "w") as f:
             f.write(str(timedelta(seconds=elasped_sec)))
+    with open(os.path.join(dataset.model_path, "configs.txt"), "w") as f:
+        for key, value in dataset.attr_save.items():
+            f.write(f"{key} : {value}\n")
+        for key, value in opt.attr_save.items():
+            f.write(f"{key} : {value}\n")
+        for key, value in pipe.attr_save.items():
+            f.write(f"{key} : {value}\n")
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
@@ -388,7 +395,7 @@ if __name__ == "__main__":
         # Set the configuration parameters on args, if they are not already set by command line arguments
         for key, value in config.items():
             setattr(args, key, value)
-
+    
     args.save_iterations.append(args.iterations)
     
     print("Optimizing " + args.model_path)
@@ -400,7 +407,6 @@ if __name__ == "__main__":
     # network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.forced_exit)
-
     # All done
     
     # print("\nTraining complete.")
