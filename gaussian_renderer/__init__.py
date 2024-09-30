@@ -16,7 +16,7 @@ from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 
 def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, 
-           override_color = None, mask=None, aligned_mask=False, use_preprocess_mask=False, mask_window=0):
+           override_color = None, mask=None, aligned_mask=False, use_preprocess_mask=False, mask_window=0, gradient_mask=None):
     """
     Render the scene. 
     
@@ -34,6 +34,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     if mask is None:
         mask = torch.ones(viewpoint_camera.image_height*viewpoint_camera.image_width, dtype=torch.int32, device=torch.device('cuda'))
         aligned_mask = False
+
     # Set up rasterization configuration
     tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
     tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
@@ -54,7 +55,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         debug=pipe.debug,
         aligned_mask=aligned_mask,
         use_preprocess_mask=use_preprocess_mask,
-        mask_window=mask_window
+        mask_window=mask_window,
+        gradient_mask=gradient_mask
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)

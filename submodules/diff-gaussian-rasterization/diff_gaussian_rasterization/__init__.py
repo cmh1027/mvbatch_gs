@@ -82,7 +82,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.mask_window,
             raster_settings.debug
         )
-
+        
         # Invoke C++/CUDA rasterizer
         if raster_settings.debug:
             cpu_args = cpu_deep_copy_tuple(args) # Copy them before they can be corrupted
@@ -146,6 +146,16 @@ class _RasterizeGaussians(torch.autograd.Function):
                 raise ex
         else:
             grad_means2D, grad_colors_precomp, grad_opacities, grad_means3D, grad_cov3Ds_precomp, grad_sh, grad_scales, grad_rotations = _C.rasterize_gaussians_backward(*args)
+        mask = raster_settings.gradient_mask
+        if mask is not None:
+            grad_means3D[~mask] = 0
+            grad_means2D[~mask] = 0
+            grad_sh[~mask] = 0
+            grad_colors_precomp[~mask] = 0
+            grad_opacities[~mask] = 0
+            grad_scales[~mask] = 0
+            grad_rotations[~mask] = 0
+            grad_cov3Ds_precomp[~mask] = 0
 
         grads = (
             grad_means3D,
@@ -179,6 +189,7 @@ class GaussianRasterizationSettings(NamedTuple):
     aligned_mask : bool
     use_preprocess_mask : bool
     mask_window : int
+    gradient_mask : torch.Tensor
 
 class GaussianRasterizer(nn.Module):
     def __init__(self, raster_settings):

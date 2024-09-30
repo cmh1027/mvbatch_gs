@@ -117,7 +117,10 @@ class OptimizationParams(ParamGroup):
         self.mask_width = 16
         self.use_preprocess_mask = False
         self.preprocess_mask_start = 0
-        
+        self.exclusive_update = False
+        self.grad_sum = False
+
+
         self.single_partial_rays = False
         self.single_partial_rays_denom = 1
         self.log_single_partial = False

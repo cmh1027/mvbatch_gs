@@ -113,7 +113,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             batch_vs = []
             batch_radii = torch.zeros_like(gaussians.get_opacity[..., 0], dtype=torch.int32)
             visibility_count = torch.zeros_like(gaussians.get_opacity[..., 0], dtype=torch.uint8)
-
+        
+        if opt.exclusive_update:
+            gradient_mask = torch.ones(gaussians.get_xyz.shape[0], dtype=torch.bool, device=torch.device('cuda'))
+        else:
+            gradient_mask = None
         for idx, viewpoint_cam in enumerate(cams):
             bg = torch.rand((3), device="cuda") if opt.random_background else background
             if n_rays == (H * W):
@@ -130,7 +134,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     pmask = torch.zeros(H*W, dtype=torch.int32, device=torch.device('cuda'))
                     pmask[torch.randperm(len(pmask), device=torch.device('cuda'))[:n_rays]] = 1
 
-            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, mask=pmask, aligned_mask=opt.mask_grid, use_preprocess_mask=use_preprocess_mask)
+            kwargs = {
+                'mask' : pmask,
+                'aligned_mask' : opt.mask_grid,
+                'use_preprocess_mask' : use_preprocess_mask,
+                'gradient_mask' : gradient_mask
+            }
+            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, **kwargs)
             (image, depth, viewspace_point_tensor, visibility_filter, radii) = (
                 render_pkg["render"][:3, ...], 
                 render_pkg["depth"],
@@ -163,8 +173,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 ssim_map = ssim(image, gt_image, mask=loss_mask)
                 ssim_loss = 1 - ssim_map
                 loss += lambda_dssim * ssim_loss.mean()
-            loss = loss / len(cams)
+            if not opt.grad_sum:
+                loss = loss / len(cams)
             loss.backward()
+            
+            if opt.exclusive_update:
+                gradient_mask = gradient_mask & (gaussians._opacity.grad.squeeze().abs() == 0.)
 
         if not opt.evaluate_time:
             vis_ratios.append(((gaussians._opacity.grad != 0).sum() / len(gaussians._opacity)).item())
@@ -172,6 +186,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 visible_ratio = sum(vis_ratios) / len(vis_ratios)
                 tb_writer.add_scalar(f'train/vis_ratio', visible_ratio, iteration)
                 vis_ratios = []
+                tb_writer.add_scalar(f'train/num_points', len(gaussians._xyz), iteration)
 
         if opt.gs_type == "mcmc":
             reg_loss = 0
