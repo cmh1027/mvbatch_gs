@@ -484,13 +484,16 @@ class GaussianModel:
 
     def densify_and_split(self, grads, opt, scene_extent, N=2):
         n_init_points = self.get_xyz.shape[0]
+        available = opt.max_points - self.get_xyz.shape[0]
+        if available <= 0: return
         # Extract points that satisfy the gradient condition
         padded_grad = torch.zeros((n_init_points), device="cuda")
         padded_grad[:grads.shape[0]] = grads.squeeze()
-        selected_pts_mask = torch.where(padded_grad >= opt.densify_grad_abs_threshold, True, False)
-        selected_pts_mask = torch.logical_and(selected_pts_mask,
-                                              torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
 
+        selected_pts_mask = torch.where(padded_grad >= opt.densify_grad_abs_threshold, True, False)
+        selected_pts_mask = torch.logical_and(selected_pts_mask, torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
+        if available < selected_pts_mask.sum():
+            selected_pts_mask[selected_pts_mask.nonzero()[available:]] = False
         stds = self.get_scaling[selected_pts_mask].repeat(N,1)
         means =torch.zeros((stds.size(0), 3),device="cuda")
         samples = torch.normal(mean=means, std=stds)
@@ -511,6 +514,10 @@ class GaussianModel:
         # Extract points that satisfy the gradient condition
         available = opt.max_points - self.get_xyz.shape[0]
         if available <= 0: return
+        if opt.adaptive_grad_threshold:
+            opt.densify_grad_threshold = torch.quantile(grads, opt.adaptive_grad_percentile).item()
+            opt.densify_grad_abs_threshold = opt.densify_grad_threshold * 4
+            opt.adaptive_grad_threshold = False
         selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= opt.densify_grad_threshold, True, False)
         selected_pts_mask = torch.logical_and(selected_pts_mask, torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent)
         if available < selected_pts_mask.sum():
@@ -528,7 +535,6 @@ class GaussianModel:
         grads[grads.isnan()] = 0.0
         grads_abs = self.xyz_gradient_accum_abs / self.denom
         grads_abs[grads_abs.isnan()] = 0.0
-        max_radii2D = self.max_radii2D.clone()
         self.densify_and_clone(grads, opt, extent)
         self.densify_and_split(grads_abs, opt, extent)
         prune_mask = (self.get_opacity < min_opacity).squeeze()

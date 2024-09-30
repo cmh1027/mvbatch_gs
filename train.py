@@ -220,9 +220,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if opt.gs_type == "original":
                     mask = visibility_count > 0
                     gaussians.max_radii2D[mask] = torch.max(gaussians.max_radii2D[mask], batch_radii[mask])
-                    batch_vs = torch.stack([t.grad for t in batch_vs], dim=0) # (B, N, 4)
-                    vs = batch_vs[..., 0:2].norm(dim=-1, keepdim=True).max(dim=0).values # (N,1)
-                    vs_abs = batch_vs[..., 2:4].norm(dim=-1, keepdim=True).max(dim=0).values
+                    batch_vs = torch.stack([t.grad for t in batch_vs], dim=0)  # (B, N, 4)
+                    
+                    vs = batch_vs[..., 0:2].norm(dim=-1, keepdim=True).sum(dim=0) 
+                    vs_abs = batch_vs[..., 2:4].norm(dim=-1, keepdim=True).sum(dim=0) 
+
                     gaussians.add_densification_stats(vs, vs_abs, mask)
                     
                     if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:

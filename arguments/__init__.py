@@ -103,7 +103,10 @@ class OptimizationParams(ParamGroup):
         self.opacity_reset_threshold = 0.01
         self.densify_grad_threshold = 0.0002
         self.densify_grad_abs_threshold = 0.0008
+        self.adaptive_grad_threshold = False
+        self.adaptive_grad_percentile = 0.825
         self.max_points = 6_000_000
+        self.modulate_densify_grad = 1.
 
         ### 3dgs-mcmc ###
         self.noise_lr = 5e5
