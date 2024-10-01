@@ -1,4 +1,5 @@
 {
     "resolution": 2,
-    "cap_max": 1800000
+    "cap_max": 1800000,
+    "adaptive_grad_percentile": 0.925
 }

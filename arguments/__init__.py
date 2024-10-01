@@ -103,10 +103,10 @@ class OptimizationParams(ParamGroup):
         self.opacity_reset_threshold = 0.01
         self.densify_grad_threshold = 0.0002
         self.densify_grad_abs_threshold = 0.0008
-        self.adaptive_grad_threshold = False
-        self.adaptive_grad_percentile = 0.825
-        self.max_points = 6_000_000
         self.modulate_densify_grad = 1.
+        self.adaptive_grad_threshold = False
+        self.adaptive_grad_percentile = 0.8375
+        self.max_points = -1
 
         ### 3dgs-mcmc ###
         self.noise_lr = 5e5
@@ -120,6 +120,9 @@ class OptimizationParams(ParamGroup):
         self.mask_grid = False
         self.mask_height = 16
         self.mask_width = 16
+        self.priority_mask_sampling = False
+        self.priority_mask_ratio = 1.0
+        self.priority_mask_mode = "max"
         self.use_preprocess_mask = False
         self.preprocess_mask_start = 0
         self.exclusive_update = False

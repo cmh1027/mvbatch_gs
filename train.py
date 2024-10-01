@@ -12,15 +12,15 @@
 import os
 import json
 import torch
+import torch.nn.functional as F
 from random import randint
 from utils.loss_utils import l1_loss, ssim
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state, mask_schedule
-import uuid
 from tqdm import tqdm
-from utils.image_utils import psnr, rescale_gt_depth, apply_depth_colormap
+from utils.image_utils import psnr, apply_depth_colormap
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from scene.gaussian_model import build_scaling_rotation
@@ -36,9 +36,12 @@ from metrics import evaluate
 from datetime import timedelta
 import time
 
+
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, forced_exit):
     if opt.gs_type == "original":
         dataset.init_scale = 1
+        if opt.max_points == -1:
+            opt.max_points = dataset.cap_max
     
     if dataset.cap_max == -1:
         print("Please specify the maximum number of Gaussians using --cap_max.")
@@ -73,11 +76,21 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             n_rays = (H * W) // opt.batch_size
         else:
             n_rays = (H * W) 
+
+    if opt.mask_grid:
+        partial_n_rays = n_rays // (opt.mask_width * opt.mask_height)
+        partial_height = (H + opt.mask_height - 1) // opt.mask_height
+        partial_width = (W + opt.mask_width - 1) // opt.mask_width
+        if opt.priority_mask_sampling:
+            loss_accum_list = torch.stack([torch.zeros(partial_height, partial_width, device=torch.device('cuda')) for _ in range(len(scene.getTrainCameras()))])
+            loss_accum_list.fill_(1e+8)
+            
     print(f"Image ({H} x {W} = {H * W}), n_rays : {n_rays}")
     if opt.mask_grid:
         print(f"tile size {opt.mask_height} x {opt.mask_width}")
 
     start_time = time.time()
+
     for iteration in range(first_iter, opt.iterations + 1): 
         gt_images = []
         if iteration == forced_exit:
@@ -118,17 +131,27 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             gradient_mask = torch.ones(gaussians.get_xyz.shape[0], dtype=torch.bool, device=torch.device('cuda'))
         else:
             gradient_mask = None
+
+
+
         for idx, viewpoint_cam in enumerate(cams):
             bg = torch.rand((3), device="cuda") if opt.random_background else background
             if n_rays == (H * W):
                 pmask = None
             else:
                 if opt.mask_grid:
-                    partial_n_rays = n_rays // (opt.mask_width * opt.mask_height)
-                    partial_height = (H + opt.mask_height - 1) // opt.mask_height
-                    partial_width = (W + opt.mask_width - 1) // opt.mask_width
                     pmask = torch.zeros(partial_height*partial_width, dtype=torch.int32, device=torch.device('cuda'))
-                    pmask[torch.randperm(len(pmask), device=torch.device('cuda'))[:partial_n_rays]] = 1
+                    if not opt.priority_mask_sampling:
+                        indices = torch.randperm(len(pmask), device=torch.device('cuda'))[:partial_n_rays]
+                        pmask[indices] = 1
+                    else:
+                        loss_accum = loss_accum_list[idx].view(-1)
+                        loss_accum = loss_accum / loss_accum.sum()
+                        priority_indices = loss_accum.multinomial(num_samples=int(partial_n_rays * opt.priority_mask_ratio), replacement=False)
+                        pmask[priority_indices] = 1
+                        if opt.priority_mask_ratio < 1.0:
+                            indices = torch.randperm(len(pmask), device=torch.device('cuda'))[:int(partial_n_rays * (1-opt.priority_mask_ratio))]
+                            pmask[indices] = 1
                     pmask = pmask.view(partial_height, partial_width)
                 else:
                     pmask = torch.zeros(H*W, dtype=torch.int32, device=torch.device('cuda'))
@@ -167,6 +190,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     loss_mask = pmask.view(H, W).to(torch.float)
 
             E_u, Ll1 = l1_loss(image, gt_image, mask=loss_mask)
+            if opt.mask_grid and opt.priority_mask_sampling:
+                with torch.no_grad():
+                    padded_E_u = torch.zeros(E_u.shape[0], partial_height * opt.mask_height, partial_width * opt.mask_width).cuda()
+                    padded_E_u[:, :E_u.shape[1], :E_u.shape[2]] = E_u
+                    window = torch.ones(1,E_u.shape[0],opt.mask_height,opt.mask_width).cuda()
+                    loss_grid = F.conv2d(padded_E_u.unsqueeze(0), window, stride=(opt.mask_height, opt.mask_width)).squeeze()
+                    if iteration % 200 == 0:
+                        tb_writer.add_histogram("train/grid_loss", loss_grid.view(-1), iteration)
+                    if opt.priority_mask_mode == "max":
+                        loss_accum_list[idx] = torch.minimum(loss_accum_list[idx], loss_grid)
+                    elif opt.priority_mask_mode == "min":
+                        loss_accum_list[idx] = torch.minimum(loss_accum_list[idx], 1 / (loss_grid + 1e-6))
+                    
             lambda_dssim = opt.lambda_dssim
             loss = (1.0 - lambda_dssim) * Ll1
             if lambda_dssim > 0:
@@ -315,12 +351,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             f.write(f"{key} : {value}\n")
 
 def prepare_output_and_logger(args):    
-    if not args.model_path:
-        if os.getenv('OAR_JOB_ID'):
-            unique_str=os.getenv('OAR_JOB_ID')
-        else:
-            unique_str = str(uuid.uuid4())
-        args.model_path = os.path.join("./output/", unique_str[0:10])
+    assert(args.model_path)
         
     # Set up output folder
     print("Output folder: {}".format(args.model_path))
@@ -347,6 +378,7 @@ def training_report(opt, tb_writer, iteration, Ll1, loss, l1_loss, testing_itera
             cameras = scene.getTestCameras()
             l1_test = 0.0
             psnr_test = 0.0
+            ssim_test = 0.0
             for idx, viewpoint in enumerate(cameras):
                 image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
                 gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
@@ -356,13 +388,17 @@ def training_report(opt, tb_writer, iteration, Ll1, loss, l1_loss, testing_itera
                         tb_writer.add_images('test' + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
                 l1_test += l1_loss(image, gt_image)[1].double()
                 psnr_test += psnr(image, gt_image).mean().double()
+                ssim_test += ssim(image, gt_image).mean().double()
+
             psnr_test /= len(cameras)
+            ssim_test /= len(cameras)
             l1_test /= len(cameras)
             if not opt.turn_off_print:
-                print("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, 'test', l1_test, psnr_test))
+                print("\n[ITER {}] Evaluating {}: L1 {} PSNR {} SSIM {}".format(iteration, 'test', l1_test, psnr_test, ssim_test))
             if tb_writer:
                 tb_writer.add_scalar('test' + '/loss_viewpoint - l1_loss', l1_test, iteration)
                 tb_writer.add_scalar('test' + '/loss_viewpoint - psnr', psnr_test, iteration)
+                tb_writer.add_scalar('test' + '/loss_viewpoint - ssim', ssim_test, iteration)
                 torch.cuda.empty_cache()
 
 def load_config(config_file):

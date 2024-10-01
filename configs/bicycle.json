@@ -1,4 +1,6 @@
 {
     "resolution": 4,
-    "cap_max": 5900000
+    "cap_max": 5900000,
+    "adaptive_grad_percentile": 0.8375,
+    "max_points": 5900000
 }
