@@ -18,6 +18,38 @@ def psnr(img1, img2):
     mse = (((img1 - img2)) ** 2).view(img1.shape[0], -1).mean(1, keepdim=True)
     return 20 * torch.log10(1.0 / torch.sqrt(mse))
 
+def _low_pass(h, w, freq):
+    x = torch.arange(-w // 2, w // 2)
+    y = torch.arange(-h // 2, h // 2)
+    X, Y = torch.meshgrid(x, y, indexing='ij')
+    radius = torch.sqrt(X**2 + Y**2)
+    return radius <= freq
+
+def _high_pass(h, w, freq):
+    x = torch.arange(-w // 2, w // 2)
+    y = torch.arange(-h // 2, h // 2)
+    X, Y = torch.meshgrid(x, y, indexing='ij')
+    radius = torch.sqrt(X**2 + Y**2)
+    return radius > freq
+
+
+def psnr_freq(img1, img2):
+    h, w = img1.shape[1:]
+    img1 = torch.fft.fftshift(torch.fft.fft2(img1))
+    img2 = torch.fft.fftshift(torch.fft.fft2(img2))
+    lp_filter = _low_pass(h, w, 70).to(img1.device)
+    hp_filter = _high_pass(h, w, 105).to(img1.device)
+    img1_low = img1 * lp_filter.T
+    img1_high = img1 * hp_filter.T
+    img2_low = img2 * lp_filter.T
+    img2_high = img2 * hp_filter.T
+
+    psnr_freq = (psnr(img1.real, img2.real).mean().double() + psnr(img1.imag, img2.imag).mean().double()) / 2
+    psnr_low_freq = (psnr(img1_low.real, img2_low.real).mean().double() + psnr(img1_low.imag, img2_low.imag).mean().double()) / 2
+    psnr_high_freq = (psnr(img1_high.real, img2_high.real).mean().double() + psnr(img1_high.imag, img2_high.imag).mean().double()) / 2
+
+    return psnr_freq, psnr_low_freq, psnr_high_freq
+
 def apply_float_colormap(image, colormap):
     if colormap == "default":
         colormap = "turbo"
@@ -57,3 +89,4 @@ def apply_depth_colormap(depth, near_plane=None, far_plane=None):
     depth = torch.clip(depth, 0, 1)
     colored_image = apply_colormap(depth)
     return colored_image.permute(2, 0, 1)
+
