@@ -20,7 +20,7 @@ import sys
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state, mask_schedule
 from tqdm import tqdm
-from utils.image_utils import psnr, apply_depth_colormap, psnr_freq
+from utils.image_utils import psnr, apply_depth_colormap, pcoef_freq
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from scene.gaussian_model import build_scaling_rotation
@@ -379,9 +379,9 @@ def training_report(opt, tb_writer, iteration, Ll1, loss, l1_loss, testing_itera
             l1_test = 0.0
             psnr_test = 0.0
             ssim_test = 0.0
-            psnr_freq_test = 0.0
-            psnr_low_freq_test = 0.0
-            psnr_high_freq_test = 0.0
+            pcoef_freq_test = 0.0
+            pcoef_low_freq_test = 0.0
+            pcoef_high_freq_test = 0.0
             for idx, viewpoint in enumerate(cameras):
                 image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
                 gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
@@ -394,17 +394,17 @@ def training_report(opt, tb_writer, iteration, Ll1, loss, l1_loss, testing_itera
 
                 psnr_test += psnr(image, gt_image).mean().double()
                 ssim_test += ssim(image, gt_image).mean().double()
-                psnr_freq_, psnr_freq_low_, psnr_freq_high_ = psnr_freq(image, gt_image)
-                psnr_freq_test += psnr_freq_
-                psnr_low_freq_test += psnr_freq_low_
-                psnr_high_freq_test += psnr_freq_high_
+                pcoef_freq_, pcoef_freq_low_, pcoef_freq_high_ = pcoef_freq(image, gt_image)
+                pcoef_freq_test += pcoef_freq_
+                pcoef_low_freq_test += pcoef_freq_low_
+                pcoef_high_freq_test += pcoef_freq_high_
 
             psnr_test /= len(cameras)
             ssim_test /= len(cameras)
             l1_test /= len(cameras)
-            psnr_freq_test /= len(cameras)
-            psnr_low_freq_test /= len(cameras)
-            psnr_high_freq_test /= len(cameras)
+            pcoef_freq_test /= len(cameras)
+            pcoef_low_freq_test /= len(cameras)
+            pcoef_high_freq_test /= len(cameras)
 
             if not opt.turn_off_print:
                 print(f"\n[ITER {iteration}] Evaluating test: L1 {'%.5f' % l1_test} PSNR {'%.4f' % psnr_test} SSIM {'%.5f' % ssim_test}")
@@ -412,9 +412,9 @@ def training_report(opt, tb_writer, iteration, Ll1, loss, l1_loss, testing_itera
                 tb_writer.add_scalar('test' + '/loss_viewpoint - l1_loss', l1_test, iteration)
                 tb_writer.add_scalar('test' + '/loss_viewpoint - psnr', psnr_test, iteration)
                 tb_writer.add_scalar('test' + '/loss_viewpoint - ssim', ssim_test, iteration)
-                tb_writer.add_scalar('test' + '/loss_viewpoint - psnr_freq', psnr_freq_test, iteration)
-                tb_writer.add_scalar('test' + '/loss_viewpoint - psnr_freq_low', psnr_low_freq_test, iteration)
-                tb_writer.add_scalar('test' + '/loss_viewpoint - psnr_freq_high', psnr_high_freq_test, iteration)
+                tb_writer.add_scalar('test' + '/loss_viewpoint - pcoef_freq', pcoef_freq_test, iteration)
+                tb_writer.add_scalar('test' + '/loss_viewpoint - pcoef_freq_low', pcoef_low_freq_test, iteration)
+                tb_writer.add_scalar('test' + '/loss_viewpoint - pcoef_freq_high', pcoef_high_freq_test, iteration)
                 torch.cuda.empty_cache()
 
 def load_config(config_file):

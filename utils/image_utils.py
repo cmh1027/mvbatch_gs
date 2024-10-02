@@ -11,6 +11,8 @@
 
 import torch
 import matplotlib
+from torchmetrics.functional.regression import pearson_corrcoef
+
 def mse(img1, img2):
     return (((img1 - img2)) ** 2).view(img1.shape[0], -1).mean(1, keepdim=True)
 
@@ -32,8 +34,13 @@ def _high_pass(h, w, freq):
     radius = torch.sqrt(X**2 + Y**2)
     return radius > freq
 
+def pcoef(img1, img2):
+    r = pearson_corrcoef(img1[0, ...].view(-1, 1), img2[0, ...].view(-1, 1))
+    g = pearson_corrcoef(img1[1, ...].view(-1, 1), img2[1, ...].view(-1, 1))
+    b = pearson_corrcoef(img1[2, ...].view(-1, 1), img2[2, ...].view(-1, 1))
+    return (r+g+b)/3
 
-def psnr_freq(img1, img2):
+def pcoef_freq(img1, img2):
     h, w = img1.shape[1:]
     img1 = torch.fft.fftshift(torch.fft.fft2(img1))
     img2 = torch.fft.fftshift(torch.fft.fft2(img2))
@@ -44,11 +51,11 @@ def psnr_freq(img1, img2):
     img2_low = img2 * lp_filter.T
     img2_high = img2 * hp_filter.T
 
-    psnr_freq = (psnr(img1.real, img2.real).mean().double() + psnr(img1.imag, img2.imag).mean().double()) / 2
-    psnr_low_freq = (psnr(img1_low.real, img2_low.real).mean().double() + psnr(img1_low.imag, img2_low.imag).mean().double()) / 2
-    psnr_high_freq = (psnr(img1_high.real, img2_high.real).mean().double() + psnr(img1_high.imag, img2_high.imag).mean().double()) / 2
+    pcoef_freq = (pcoef(img1.real, img2.real) + pcoef(img1.imag, img2.imag)) / 2
+    pcoef_low_freq = (pcoef(img1_low.real, img2_low.real) + pcoef(img1_low.imag, img2_low.imag)) / 2
+    pcoef_high_freq = (pcoef(img1_high.real, img2_high.real) + pcoef(img1_high.imag, img2_high.imag)) / 2
 
-    return psnr_freq, psnr_low_freq, psnr_high_freq
+    return pcoef_freq, pcoef_low_freq, pcoef_high_freq
 
 def apply_float_colormap(image, colormap):
     if colormap == "default":
