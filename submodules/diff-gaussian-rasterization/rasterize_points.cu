@@ -61,6 +61,7 @@ RasterizeGaussiansCUDA(
 	const int P = means3D.size(0);
 	const int H = image_height;
 	const int W = image_width;
+	const int B = viewmatrix.size(0);
 
 	auto int_opts = means3D.options().dtype(torch::kInt32);
 	auto float_opts = means3D.options().dtype(torch::kFloat32);
@@ -91,7 +92,7 @@ RasterizeGaussiansCUDA(
 			geomFunc,
 			binningFunc,
 			imgFunc,
-			P, degree, M,
+			P, degree, M, B,
 			background.contiguous().data<float>(),
 			W, H,
 			means3D.contiguous().data<float>(),

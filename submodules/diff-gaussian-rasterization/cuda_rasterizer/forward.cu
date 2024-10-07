@@ -175,8 +175,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
-	const int* mask,
-	const bool aligned_mask)
+	const int* mask)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P)
@@ -200,7 +199,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float2 point_image = { ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H) };
 	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
 	uint32_t vertial_blocks = (H + BLOCK_Y - 1) / BLOCK_Y;
-
+	points_xy_image[idx] = point_image;
 
 	const float* cov3D;
 	computeCov3D(scales[idx], scale_modifier, rotations[idx], cov3Ds + idx * 6);
@@ -239,10 +238,10 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	// Store some useful helper data for the next steps.
 	depths[idx] = p_view.z;
 	radii[idx] = my_radius;
-	points_xy_image[idx] = point_image;
+	
 	// Inverse 2D covariance and opacity neatly pack into one float4
 	conic_opacity[idx] = { conic.x, conic.y, conic.z, opacities[idx] };
-	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
+	tiles_touched[idx] = tiles;
 }
 
 // Main rasterization method. Collaboratively works on one tile per
@@ -436,8 +435,7 @@ void FORWARD::preprocess(int P, int D, int M,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
-	const int* mask,
-	const bool aligned_mask)
+	const int* mask)
 {
 	preprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
 		P, D, M,
@@ -462,7 +460,6 @@ void FORWARD::preprocess(int P, int D, int M,
 		conic_opacity,
 		grid,
 		tiles_touched,
-		mask,
-		aligned_mask
+		mask
 	);
 }
