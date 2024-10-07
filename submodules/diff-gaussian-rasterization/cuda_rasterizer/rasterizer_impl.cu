@@ -81,8 +81,8 @@ __global__ void savePointIndex(
 		if(batch_rendered_check[B * idx + i]){
 			point_index[num_rendered_offset+j] = idx;
 			point_batch_index[num_rendered_offset+j] = i;
+			j += 1;
 		}
-		j += 1;
 	}
 }
 
@@ -250,11 +250,12 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 	int* batch_num_rendered;
     int* batch_num_rendered_sums;
 	bool* batch_rendered_check;
-	int batch_num_rendered_sum;
+	int BR;
 	cudaMalloc(&batch_num_rendered, sizeof(int) * P);
-	cudaMemset(batch_num_rendered, 0, sizeof(int) * P);
 	cudaMalloc(&batch_num_rendered_sums, sizeof(int) * P);
 	cudaMalloc(&batch_rendered_check, sizeof(bool) * B * P);
+	cudaMemset(batch_num_rendered, 0, sizeof(int) * P);
+	cudaMemset(batch_rendered_check, 0, sizeof(bool) * B * P);
 	CHECK_CUDA(FORWARD::measureBufferSize(
 		P, D, M, B,
 		means3D,
@@ -278,16 +279,17 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
     cudaMalloc(&d_temp_storage, temp_storage_bytes);
     cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, batch_num_rendered, batch_num_rendered_sums, P);
 	cudaFree(d_temp_storage);
-	cudaMemcpy(&batch_num_rendered_sum, batch_num_rendered_sums + P - 1, sizeof(int), cudaMemcpyDeviceToHost);
+	cudaMemcpy(&BR, batch_num_rendered_sums + P - 1, sizeof(int), cudaMemcpyDeviceToHost);
 
-	size_t chunk_size = required<GeometryState>(batch_num_rendered_sum, P);
+	size_t chunk_size = required<GeometryState>(BR, P);
 	char* chunkptr = geometryBuffer(chunk_size);
-	GeometryState geomState = GeometryState::fromChunk(chunkptr, batch_num_rendered_sum, P);
+	GeometryState geomState = GeometryState::fromChunk(chunkptr, BR, P);
 
-	cudaMemset(geomState.point_index, 0, sizeof(int) * batch_num_rendered_sum);
-	cudaMemset(geomState.point_batch_index, 0, sizeof(int) * batch_num_rendered_sum);
+	cudaMemset(geomState.point_index, 0, sizeof(int) * BR);
+	cudaMemset(geomState.point_batch_index, 0, sizeof(int) * BR);
 	savePointIndex << <(P + 255) / 256, 256 >> > (P, B, batch_num_rendered_sums, batch_rendered_check, geomState.point_index, geomState.point_batch_index);
 
+	
 	cudaFree(batch_num_rendered);
 	cudaFree(batch_num_rendered_sums);
 	cudaFree(batch_rendered_check);
@@ -295,9 +297,8 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 	size_t img_chunk_size = required<ImageState>(width * height);
 	char* img_chunkptr = imageBuffer(img_chunk_size);
 	ImageState imgState = ImageState::fromChunk(img_chunkptr, width * height);
-
 	CHECK_CUDA(FORWARD::preprocess(
-		P, D, M,
+		BR, P, D, M,
 		means3D,
 		(glm::vec3*)scales,
 		scale_modifier,
@@ -317,8 +318,11 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		geomState.rgb,
 		geomState.conic_opacity,
 		tile_grid,
-		geomState.tiles_touched
+		geomState.tiles_touched,
+		geomState.point_index,
+		geomState.point_batch_index
 	), 1)
+
 
 	// Compute prefix sum over full list of touched tile counts by Gaussians
 	// E.g., [2, 3, 0, 2, 1] -> [2, 5, 5, 7, 8]
@@ -384,7 +388,7 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		mask,
 		aligned_mask), 1)
 
-	return std::make_tuple(num_rendered, batch_num_rendered_sum);
+	return std::make_tuple(num_rendered, BR);
 }
 
 // Produce necessary gradients for optimization, corresponding

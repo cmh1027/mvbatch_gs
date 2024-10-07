@@ -38,7 +38,7 @@ namespace FORWARD
 		bool* batch_rendered_check
 	);
 
-	void preprocess(int P, int D, int M,
+	void preprocess(int BR, int P, int D, int M,
 		const float* orig_points,
 		const glm::vec3* scales,
 		const float scale_modifier,
@@ -59,7 +59,9 @@ namespace FORWARD
 		float* colors,
 		float4* conic_opacity,
 		const dim3 grid,
-		uint32_t* tiles_touched
+		uint32_t* tiles_touched,
+		const int* point_index,
+		const int* point_batch_index
 	);
 
 	// Main rasterization method.

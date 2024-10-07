@@ -17,16 +17,16 @@ namespace cg = cooperative_groups;
 
 // Forward method for converting the input spherical harmonics
 // coefficients of each Gaussian to a simple RGB color.
-__device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const glm::vec3* means, glm::vec3 campos, const float* shs, bool* clamped)
+__device__ glm::vec3 computeColorFromSH(int idx, int point_idx, int deg, int max_coeffs, const glm::vec3* means, glm::vec3 campos, const float* shs, bool* clamped)
 {
 	// The implementation is loosely based on code for 
 	// "Differentiable Point-Based Radiance Fields for 
 	// Efficient View Synthesis" by Zhang et al. (2022)
-	glm::vec3 pos = means[idx];
+	glm::vec3 pos = means[point_idx];
 	glm::vec3 dir = pos - campos;
 	dir = dir / glm::length(dir);
 
-	glm::vec3* sh = ((glm::vec3*)shs) + idx * max_coeffs;
+	glm::vec3* sh = ((glm::vec3*)shs) + point_idx * max_coeffs;
 	glm::vec3 result = SH_C0 * sh[0];
 
 	if (deg > 0)
@@ -213,7 +213,7 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 }
 
 template<int C>
-__global__ void preprocessCUDA(int P, int D, int M,
+__global__ void preprocessCUDA(int BR, int P, int D, int M,
 	const float* orig_points,
 	const glm::vec3* scales,
 	const float scale_modifier,
@@ -234,19 +234,31 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float* rgb,
 	float4* conic_opacity,
 	const dim3 grid,
-	uint32_t* tiles_touched)
+	uint32_t* tiles_touched,
+	const int* point_index,
+	const int* point_batch_index
+)
 {
 	auto idx = cg::this_grid().thread_rank();
-	if (idx >= P)
+	if (idx >= BR)
 		return;
+	int point_idx = point_index[idx];
+	// printf("%d ", point_idx);
+	int batch_idx = point_batch_index[idx];
+
+	/* batch offset */
+	viewmatrix += batch_idx * 16;
+	projmatrix += batch_idx * 16;
+	cam_pos = (glm::vec3*)((float3*)cam_pos + batch_idx);
+	radii += P * batch_idx;
 
 	// Perform near culling, quit if outside.
 	float3 p_view;
-	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, p_view))
+	if (!in_frustum(point_idx, orig_points, viewmatrix, projmatrix, p_view))
 		return;
 
 	// Transform point by projecting
-	float3 p_orig = { orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2] };
+	float3 p_orig = { orig_points[3 * point_idx], orig_points[3 * point_idx + 1], orig_points[3 * point_idx + 2] };
 	float4 p_hom = transformPoint4x4(p_orig, projmatrix);
 	float p_w = 1.0f / (p_hom.w + 0.0000001f);
 	float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
@@ -256,7 +268,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	points_xy_image[idx] = point_image;
 
 	const float* cov3D;
-	computeCov3D(scales[idx], scale_modifier, rotations[idx], cov3Ds + idx * 6);
+	computeCov3D(scales[point_idx], scale_modifier, rotations[point_idx], cov3Ds + idx * 6);
 	cov3D = cov3Ds + idx * 6;
 
 
@@ -265,8 +277,10 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 	// Invert covariance (EWA algorithm)
 	float det = (cov.x * cov.z - cov.y * cov.y);
-	if (det == 0.0f)
+	if (det == 0.0f){
 		return;
+	}
+		
 	float det_inv = 1.f / det;
 	float3 conic = { cov.z * det_inv, -cov.y * det_inv, cov.x * det_inv };
 
@@ -284,18 +298,21 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	if (tiles == 0)
 		return;
 
-	glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
+	glm::vec3 result = computeColorFromSH(idx, point_idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
 	rgb[idx * C + 0] = result.x;
 	rgb[idx * C + 1] = result.y;
 	rgb[idx * C + 2] = result.z;
 
 	// Store some useful helper data for the next steps.
 	depths[idx] = p_view.z;
-	radii[idx] = my_radius;
+	radii[point_idx] = my_radius;
 	
 	// Inverse 2D covariance and opacity neatly pack into one float4
-	conic_opacity[idx] = { conic.x, conic.y, conic.z, opacities[idx] };
-	tiles_touched[idx] = tiles;
+	conic_opacity[idx] = { conic.x, conic.y, conic.z, opacities[point_idx] };
+	// if(point_idx == 0){
+	// 	printf("%d (%d %d %d)\n", tiles, scales[point_idx].x, scales[point_idx].y, scales[point_idx].z);
+	// }
+	atomicAdd(tiles_touched + point_idx, tiles);
 }
 
 // Main rasterization method. Collaboratively works on one tile per
@@ -465,9 +482,10 @@ void FORWARD::render(
 		out_depth,
 		mask,
 		aligned_mask);
+	ERROR_CHECK
 }
 
-void FORWARD::preprocess(int P, int D, int M,
+void FORWARD::preprocess(int BR, int P, int D, int M,
 	const float* means3D,
 	const glm::vec3* scales,
 	const float scale_modifier,
@@ -488,10 +506,13 @@ void FORWARD::preprocess(int P, int D, int M,
 	float* rgb,
 	float4* conic_opacity,
 	const dim3 grid,
-	uint32_t* tiles_touched)
+	uint32_t* tiles_touched,
+	const int* point_index,
+	const int* point_batch_index
+)
 {
-	preprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
-		P, D, M,
+	preprocessCUDA<NUM_CHANNELS> << <(BR + 255) / 256, 256 >> > (
+		BR, P, D, M,
 		means3D,
 		scales,
 		scale_modifier,
@@ -512,8 +533,11 @@ void FORWARD::preprocess(int P, int D, int M,
 		rgb,
 		conic_opacity,
 		grid,
-		tiles_touched
+		tiles_touched,
+		point_index,
+		point_batch_index
 	);
+	ERROR_CHECK
 }
 
 void FORWARD::measureBufferSize(int P, int D, int M, int B,
@@ -548,4 +572,5 @@ void FORWARD::measureBufferSize(int P, int D, int M, int B,
 		batch_num_rendered,
 		batch_rendered_check
 	);
+	ERROR_CHECK
 }

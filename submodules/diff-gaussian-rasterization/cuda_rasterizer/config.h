@@ -18,15 +18,29 @@
 #endif
 
 #define PRINT_CUDA_ARRAY(N, type, src) \
-	int temp[N]; \
-	cudaMemcpy(temp, src, sizeof(type) * N, cudaMemcpyDeviceToHost); \
-	for(int i=0; i<N; ++i){ \
-		printf("%d ", temp[i]); \
-	} \
-    printf("\n"); \
-	exit(0);
+	{ \
+		int temp[N]; \
+		cudaMemcpy(temp, src, sizeof(type) * N, cudaMemcpyDeviceToHost); \
+		for(int i=0; i<N; ++i){ \
+			printf("%d ", temp[i]); \
+		} \
+		printf("\n"); \ 
+	}
 
-// #define DEBUG
+
+
+#define PRINT_CUDA_ARRAY2(N, type, src1, src2) \
+	{ \
+		int temp1[N]; \
+		int temp2[N]; \
+		cudaMemcpy(temp1, src1, sizeof(type) * N, cudaMemcpyDeviceToHost); \
+		cudaMemcpy(temp2, src2, sizeof(type) * N, cudaMemcpyDeviceToHost); \
+		for(int i=0; i<N; ++i){ \
+			printf("%d %d\n", temp1[i], temp2[i]); \
+		} \
+	}
+
+#define DEBUG
 #ifdef DEBUG
     #define TIMEPRINT(fmt, ...) printf(fmt, ##__VA_ARGS__);
     #define PRINTLINE printf("End %s %d\n", __FILE__, __LINE__);
