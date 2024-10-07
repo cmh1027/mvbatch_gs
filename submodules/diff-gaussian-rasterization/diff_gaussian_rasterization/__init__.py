@@ -72,8 +72,6 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.campos,
             raster_settings.mask,
             raster_settings.aligned_mask,
-            raster_settings.use_preprocess_mask,
-            raster_settings.mask_window,
             raster_settings.debug
         )
         

@@ -52,8 +52,6 @@ RasterizeGaussiansCUDA(
 	const torch::Tensor& campos,
 	const torch::Tensor& mask,
 	const bool aligned_mask,
-	const bool use_preprocess_mask,
-	const int window,
 	const bool debug)
 {
 	if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
@@ -112,8 +110,6 @@ RasterizeGaussiansCUDA(
 			radii.contiguous().data<int>(),
 			mask.contiguous().data<int>(),
 			aligned_mask,
-			use_preprocess_mask,
-			window,
 			debug);
 	}
 	return std::make_tuple(rendered, out_color, out_depth, radii, geomBuffer, binningBuffer, imgBuffer);

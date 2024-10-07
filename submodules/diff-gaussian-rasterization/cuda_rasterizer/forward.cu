@@ -176,9 +176,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	const dim3 grid,
 	uint32_t* tiles_touched,
 	const int* mask,
-	const bool aligned_mask,
-	const bool use_preprocess_mask,
-	const int window)
+	const bool aligned_mask)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P)
@@ -232,21 +230,6 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	auto tiles = (rect_max.x - rect_min.x) * (rect_max.y - rect_min.y);
 	if (tiles == 0)
 		return;
-
-	if(use_preprocess_mask && -1 < p_proj.x && p_proj.x < 1 && -1 < p_proj.y && p_proj.y < 1){
-		assert(aligned_mask);
-		if(tiles < 9){
-			bool unmasked = false;
-			for(int b_x=rect_min.x; b_x<rect_max.x && !unmasked; ++b_x){
-				for(int b_y=rect_min.y; b_y<rect_max.y && !unmasked; ++b_y){
-					if(mask[b_y * horizontal_blocks + b_x]){
-						unmasked = true;
-					}
-				}
-			}
-			if(!unmasked) return;
-		}
-	}
 
 	glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
 	rgb[idx * C + 0] = result.x;
@@ -454,9 +437,7 @@ void FORWARD::preprocess(int P, int D, int M,
 	const dim3 grid,
 	uint32_t* tiles_touched,
 	const int* mask,
-	const bool aligned_mask,
-	const bool use_preprocess_mask,
-	int window)
+	const bool aligned_mask)
 {
 	preprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
 		P, D, M,
@@ -482,8 +463,6 @@ void FORWARD::preprocess(int P, int D, int M,
 		grid,
 		tiles_touched,
 		mask,
-		aligned_mask,
-		use_preprocess_mask,
-		window
+		aligned_mask
 	);
 }

@@ -44,9 +44,7 @@ namespace FORWARD
 		const dim3 grid,
 		uint32_t* tiles_touched,
 		const int* mask,
-		const bool aligned_mask,
-		const bool use_mask,
-		const int window
+		const bool aligned_mask
 	);
 
 	// Main rasterization method.

@@ -50,8 +50,6 @@ namespace CudaRasterizer
 			int* radii,
 			const int* mask,
 			const bool aligned_mask,
-			const bool use_mask,
-			const int window,
 			bool debug = false);
 
 		static void backward(
