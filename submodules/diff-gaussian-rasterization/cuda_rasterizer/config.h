@@ -17,6 +17,15 @@
 #define BLOCK_Y 16
 #endif
 
+#define PRINT_CUDA_ARRAY(N, type, src) \
+	int temp[N]; \
+	cudaMemcpy(temp, src, sizeof(type) * N, cudaMemcpyDeviceToHost); \
+	for(int i=0; i<N; ++i){ \
+		printf("%d ", temp[i]); \
+	} \
+    printf("\n"); \
+	exit(0);
+
 // #define DEBUG
 #ifdef DEBUG
     #define TIMEPRINT(fmt, ...) printf(fmt, ##__VA_ARGS__);

@@ -163,7 +163,8 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	const float tan_fovx, float tan_fovy,
 	const float focal_x, float focal_y,
 	const dim3 grid,
-	int* batch_num_rendered)
+	int* batch_num_rendered,
+	bool* batch_rendered_check)
 {
 	auto idx = cg::this_grid().thread_rank();
 
@@ -208,6 +209,7 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	if (tiles == 0)
 		return;
 	atomicAdd(batch_num_rendered + idx, 1);
+	batch_rendered_check[idx * B + batch_idx] = true;
 }
 
 template<int C>
@@ -526,7 +528,8 @@ void FORWARD::measureBufferSize(int P, int D, int M, int B,
 	const float focal_x, float focal_y,
 	const float tan_fovx, float tan_fovy,
 	const dim3 grid,
-	int* batch_num_rendered
+	int* batch_num_rendered,
+	bool* batch_rendered_check
 )
 {
 	measureBufferSizeCUDA << <(B * P + 255) / 256, 256 >> > (
@@ -542,6 +545,7 @@ void FORWARD::measureBufferSize(int P, int D, int M, int B,
 		tan_fovx, tan_fovy,
 		focal_x, focal_y,
 		grid,
-		batch_num_rendered
+		batch_num_rendered,
+		batch_rendered_check
 	);
 }

@@ -34,7 +34,8 @@ namespace FORWARD
 		const float focal_x, float focal_y,
 		const float tan_fovx, float tan_fovy,
 		const dim3 grid,
-		int* batch_num_rendered
+		int* batch_num_rendered,
+		bool* batch_rendered_check
 	);
 
 	void preprocess(int P, int D, int M,

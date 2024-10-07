@@ -40,8 +40,9 @@ namespace CudaRasterizer
 		uint32_t* point_offsets;
 		uint32_t* tiles_touched;
 		int* point_index;
+		int* point_batch_index;
 
-		static GeometryState fromChunk(char*& chunk, size_t P);
+		static GeometryState fromChunk(char*& chunk, size_t BP, size_t P);
 	};
 
 	struct ImageState
@@ -70,6 +71,14 @@ namespace CudaRasterizer
 	{
 		char* size = nullptr;
 		T::fromChunk(size, P);
+		return ((size_t)size) + 128;
+	}
+
+	template<typename T> 
+	size_t required(size_t P1, size_t P2)
+	{
+		char* size = nullptr;
+		T::fromChunk(size, P1, P2);
 		return ((size_t)size) + 128;
 	}
 
