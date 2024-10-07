@@ -90,14 +90,12 @@ def training(dataset, opt, pipe, args):
         else:
             n_rays = (H * W) 
 
-    if opt.mask_grid:
-        partial_n_rays = n_rays // (opt.mask_width * opt.mask_height)
-        partial_height = (H + opt.mask_height - 1) // opt.mask_height
-        partial_width = (W + opt.mask_width - 1) // opt.mask_width
+    partial_n_rays = n_rays // (opt.mask_width * opt.mask_height)
+    partial_height = (H + opt.mask_height - 1) // opt.mask_height
+    partial_width = (W + opt.mask_width - 1) // opt.mask_width
             
     print(f"Image ({H} x {W} = {H * W}), n_rays : {n_rays}")
-    if opt.mask_grid:
-        print(f"tile size {opt.mask_height} x {opt.mask_width}")
+    print(f"tile size {opt.mask_height} x {opt.mask_width}")
 
     start_time = time.time()
     batch_teleport = False
@@ -138,7 +136,8 @@ def training(dataset, opt, pipe, args):
         else:
             cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, strategy=opt.batch_sample_strategy)
 
-        cams = [viewpoints[min(idx, len(viewpoints)-1)] for idx in cam_idxs]
+        # cams = [viewpoints[min(idx, len(viewpoints)-1)] for idx in cam_idxs]
+        cams = [viewpoints[min(idx, len(viewpoints)-1)] for idx in [0,1,2,3]]
 
         vis_ratios = []
         batch_vs = []
@@ -146,27 +145,11 @@ def training(dataset, opt, pipe, args):
         batch_radii = torch.zeros_like(gaussians.get_opacity[..., 0], dtype=torch.int32)
         visibility_count = torch.zeros_like(gaussians.get_opacity[..., 0], dtype=torch.uint8)
 
-        #########################
         bg = torch.rand((3), device="cuda") if opt.random_background else background
-        if n_rays == (H * W):
-            pmask = None
-        else:
-            raise NotImplementedError
-            if opt.mask_grid:
-                pmask = torch.zeros(partial_height*partial_width, dtype=torch.int32, device=torch.device('cuda'))
-                indices = torch.randperm(len(pmask), device=torch.device('cuda'))[:partial_n_rays]
-                pmask[indices] = 1
-                pmask = pmask.view(partial_height, partial_width)
-            else:
-                pmask = torch.zeros(H*W, dtype=torch.int32, device=torch.device('cuda'))
-                pmask[torch.randperm(len(pmask), device=torch.device('cuda'))[:n_rays]] = 1
 
-        kwargs = {
-            'mask' : pmask,
-            'aligned_mask' : opt.mask_grid
-        }
-        render_pkg = render(cams, gaussians, pipe, bg, **kwargs)
-        raise NotImplementedError
+        # pmask = torch.zeros(partial_height*partial_width, dtype=torch.int32, device=torch.device('cuda'))
+        pmask = torch.randint(0, len(cams), (partial_height, partial_width), dtype=torch.int32, device=torch.device('cuda'))
+        render_pkg = render(cams, gaussians, pipe, bg, mask=pmask)
         (image, depth, viewspace_point_tensor, visibility_filter, radii, shs_grad) = (
             render_pkg["render"][:3, ...], 
             render_pkg["depth"],

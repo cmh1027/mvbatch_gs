@@ -49,7 +49,6 @@ namespace CudaRasterizer
 			float* out_depth,
 			int* radii,
 			const int* mask,
-			const bool aligned_mask,
 			bool debug = false);
 
 		static void backward(
@@ -82,7 +81,6 @@ namespace CudaRasterizer
 			float* dL_dscale,
 			float* dL_drot,
 			const int* mask,
-			const bool aligned_mask,
 			bool debug);
 	};
 };

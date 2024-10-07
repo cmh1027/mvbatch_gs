@@ -243,7 +243,6 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	if (idx >= BR)
 		return;
 	int point_idx = point_index[idx];
-	// printf("%d ", point_idx);
 	int batch_idx = point_batch_index[idx];
 
 	/* batch offset */
@@ -309,10 +308,7 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	
 	// Inverse 2D covariance and opacity neatly pack into one float4
 	conic_opacity[idx] = { conic.x, conic.y, conic.z, opacities[point_idx] };
-	// if(point_idx == 0){
-	// 	printf("%d (%d %d %d)\n", tiles, scales[point_idx].x, scales[point_idx].y, scales[point_idx].z);
-	// }
-	atomicAdd(tiles_touched + point_idx, tiles);
+	tiles_touched[idx] = tiles;
 }
 
 // Main rasterization method. Collaboratively works on one tile per
@@ -334,7 +330,8 @@ renderCUDA(
 	float* __restrict__ out_color,
 	float* __restrict__ out_depth,
 	const int* __restrict__ mask,
-	const bool aligned_mask)
+	const int* __restrict__ point_index,
+	const int* __restrict__ point_batch_index)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -343,10 +340,6 @@ renderCUDA(
 	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
 	uint32_t vertical_blocks = (H + BLOCK_Y - 1) / BLOCK_Y;
 
-	if(aligned_mask && mask[block_y * horizontal_blocks + block_x] == 0) {
-		return;
-	}
-
 	uint2 pix_min = { block_x * BLOCK_X, block_y * BLOCK_Y };
 	uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
 	uint32_t pix_id = W * pix.y + pix.x;
@@ -354,8 +347,9 @@ renderCUDA(
 
 	// Check if this thread is associated with a valid pixel or outside.
 	bool inside = pix.x < W && pix.y < H;
-	if(inside && !aligned_mask){
-		inside = inside && mask[pix_id];
+	int tile_batch_idx = -1;
+	if(inside){
+		tile_batch_idx = mask[block_y * horizontal_blocks + block_x];
 	}
 	// Done threads can help with fetching, but don't rasterize
 	bool done = !inside;
@@ -401,6 +395,8 @@ renderCUDA(
 		{
 			// Keep track of current position in range
 			contributor++;
+			// ignore if batch_idx of the point is not matched with the value in the mask 
+			if(point_batch_index[collected_id[j]] != tile_batch_idx) continue;
 
 			// Resample using conic matrix (cf. "Surface 
 			// Splatting" by Zwicker et al., 2001)
@@ -465,7 +461,9 @@ void FORWARD::render(
 	float* out_color,
 	float* out_depth,
 	const int* mask,
-	const bool aligned_mask)
+	const int* point_index,
+	const int* point_batch_index
+)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -481,7 +479,9 @@ void FORWARD::render(
 		out_color,
 		out_depth,
 		mask,
-		aligned_mask);
+		point_index,
+		point_batch_index
+	);
 	ERROR_CHECK
 }
 

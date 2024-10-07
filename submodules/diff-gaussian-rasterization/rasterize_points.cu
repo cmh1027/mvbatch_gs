@@ -52,13 +52,15 @@ RasterizeGaussiansCUDA(
 	const int degree,
 	const torch::Tensor& campos,
 	const torch::Tensor& mask,
-	const bool aligned_mask,
 	const bool debug)
 {
 	if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
 		AT_ERROR("means3D must have dimensions (num_points, 3)");
 	}
-	
+	assert(mask.size(0) == (image_height + BLOCK_Y) / BLOCK_Y);
+	assert(mask.size(1) == (image_width + BLOCK_X) / BLOCK_X);
+
+
 	const int P = means3D.size(0);
 	const int H = image_height;
 	const int W = image_width;
@@ -111,7 +113,6 @@ RasterizeGaussiansCUDA(
 			out_depth.contiguous().data<float>(),
 			radii.contiguous().data<int>(),
 			mask.contiguous().data<int>(),
-			aligned_mask,
 			debug);
 		rendered = std::get<0>(returned);
 		batch_rendered = std::get<0>(returned);
@@ -142,7 +143,6 @@ RasterizeGaussiansBackwardCUDA(
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
 	const torch::Tensor& mask,
-	const bool aligned_mask,
 	const bool debug) 
 {
 	const int P = means3D.size(0);
@@ -198,7 +198,6 @@ RasterizeGaussiansBackwardCUDA(
 		dL_dscales.contiguous().data<float>(),
 		dL_drotations.contiguous().data<float>(),
 		mask.contiguous().data<int>(),
-		aligned_mask,
 		debug);
 	}
 

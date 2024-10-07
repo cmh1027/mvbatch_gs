@@ -15,7 +15,7 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 
-def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, mask=None, aligned_mask=False):
+def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, mask=None):
     """
     Render the scene. 
     
@@ -36,9 +36,6 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
         assert viewpoint_cameras[0].image_height == viewpoint_cameras[1].image_height
         assert math.tan(viewpoint_cameras[0].FoVx * 0.5) == math.tan(viewpoint_cameras[1].FoVx * 0.5)
 
-    if mask is None:
-        mask = torch.ones(len(viewpoint_cameras), viewpoint_cameras[0].image_height*viewpoint_cameras[0].image_width, dtype=torch.int32, device=torch.device('cuda'))
-        assert not aligned_mask
 
     # Set up rasterization configuration
     tanfovx = math.tan(viewpoint_cameras[0].FoVx * 0.5)
@@ -48,6 +45,11 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
     viewmatrix = torch.stack([cam.world_view_transform for cam in viewpoint_cameras])
     projmatrix = torch.stack([cam.full_proj_transform for cam in viewpoint_cameras])
     campos = torch.stack([cam.camera_center for cam in viewpoint_cameras])
+
+
+    if mask is None:
+        raise NotImplementedError
+        mask = torch.zeros(image_height*image_width, dtype=torch.int32, device=torch.device('cuda'))
 
     raster_settings = GaussianRasterizationSettings(
         image_height=image_height,
@@ -61,8 +63,7 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
         sh_degree=pc.active_sh_degree,
         campos=campos,
         mask=mask,
-        debug=pipe.debug,
-        aligned_mask=aligned_mask
+        debug=pipe.debug
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)

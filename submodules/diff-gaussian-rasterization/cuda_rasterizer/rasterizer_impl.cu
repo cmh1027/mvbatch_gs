@@ -89,27 +89,31 @@ __global__ void savePointIndex(
 // Generates one key/value pair for all Gaussian / tile overlaps. 
 // Run once per Gaussian (1:N mapping).
 __global__ void duplicateWithKeys(
-	int P,
+	int BR, int P, int B,
 	const float2* points_xy,
 	const float* depths,
 	const uint32_t* offsets,
 	uint64_t* gaussian_keys_unsorted,
 	uint32_t* gaussian_values_unsorted,
-	int* radii,
-	dim3 grid)
+	const int* radii,
+	dim3 grid,
+	const int* point_index,
+	const int* point_batch_index)
 {
 	auto idx = cg::this_grid().thread_rank();
-	if (idx >= P)
+	if (idx >= BR)
 		return;
-
+	auto point_idx = point_index[idx];
+	auto batch_idx = point_batch_index[idx];
+	radii += P * batch_idx;
 	// Generate no key/value pair for invisible Gaussians
-	if (radii[idx] > 0)
+	if (radii[point_idx] > 0)
 	{
 		// Find this Gaussian's offset in buffer for writing keys/values.
 		uint32_t off = (idx == 0) ? 0 : offsets[idx - 1];
 		uint2 rect_min, rect_max;
 
-		getRect(points_xy[idx], radii[idx], rect_min, rect_max, grid);
+		getRect(points_xy[idx], radii[point_idx], rect_min, rect_max, grid);
 
 		// For each tile that the bounding rect overlaps, emit a 
 		// key/value pair. The key is |  tile ID  |      depth      |,
@@ -173,21 +177,20 @@ void CudaRasterizer::Rasterizer::markVisible(
 		present);
 }
 
-CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& chunk, size_t BP, size_t P)
+CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& chunk, size_t BR)
 {
 	GeometryState geom;
-	obtain(chunk, geom.depths, BP, 128);
-	obtain(chunk, geom.clamped, BP * 3, 128);
-	obtain(chunk, geom.means2D, BP, 128);
-	obtain(chunk, geom.cov3D, BP * 6, 128);
-	obtain(chunk, geom.conic_opacity, BP, 128);
-	obtain(chunk, geom.rgb, BP * 3, 128);
-	obtain(chunk, geom.point_index, BP, 128);
-	obtain(chunk, geom.point_batch_index, BP, 128);
-	///
-	obtain(chunk, geom.tiles_touched, P, 128);
-	obtain(chunk, geom.point_offsets, P, 128);
-	cub::DeviceScan::InclusiveSum(nullptr, geom.scan_size, geom.tiles_touched, geom.tiles_touched, P);
+	obtain(chunk, geom.depths, BR, 128);
+	obtain(chunk, geom.clamped, BR * 3, 128);
+	obtain(chunk, geom.means2D, BR, 128);
+	obtain(chunk, geom.cov3D, BR * 6, 128);
+	obtain(chunk, geom.conic_opacity, BR, 128);
+	obtain(chunk, geom.rgb, BR * 3, 128);
+	obtain(chunk, geom.point_index, BR, 128);
+	obtain(chunk, geom.point_batch_index, BR, 128);
+	obtain(chunk, geom.tiles_touched, BR, 128);
+	obtain(chunk, geom.point_offsets, BR, 128);
+	cub::DeviceScan::InclusiveSum(nullptr, geom.scan_size, geom.tiles_touched, geom.tiles_touched, BR);
 	obtain(chunk, geom.scanning_space, geom.scan_size, 128);
 	return geom;
 }
@@ -239,7 +242,6 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 	float* out_depth,
 	int* radii,
 	const int* mask,
-	const bool aligned_mask,
 	bool debug)
 {
 	const float focal_y = height / (2.0f * tan_fovy);
@@ -281,9 +283,9 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 	cudaFree(d_temp_storage);
 	cudaMemcpy(&BR, batch_num_rendered_sums + P - 1, sizeof(int), cudaMemcpyDeviceToHost);
 
-	size_t chunk_size = required<GeometryState>(BR, P);
+	size_t chunk_size = required<GeometryState>(BR);
 	char* chunkptr = geometryBuffer(chunk_size);
-	GeometryState geomState = GeometryState::fromChunk(chunkptr, BR, P);
+	GeometryState geomState = GeometryState::fromChunk(chunkptr, BR);
 
 	cudaMemset(geomState.point_index, 0, sizeof(int) * BR);
 	cudaMemset(geomState.point_batch_index, 0, sizeof(int) * BR);
@@ -326,11 +328,11 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 
 	// Compute prefix sum over full list of touched tile counts by Gaussians
 	// E.g., [2, 3, 0, 2, 1] -> [2, 5, 5, 7, 8]
-	CHECK_CUDA(cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, P), debug)
+	CHECK_CUDA(cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, BR), debug)
 
 	// Retrieve total number of Gaussian instances to launch and resize aux buffers
 	int num_rendered;
-	CHECK_CUDA(cudaMemcpy(&num_rendered, geomState.point_offsets + P - 1, sizeof(int), cudaMemcpyDeviceToHost), debug);
+	CHECK_CUDA(cudaMemcpy(&num_rendered, geomState.point_offsets + BR - 1, sizeof(int), cudaMemcpyDeviceToHost), debug);
 
 	size_t binning_chunk_size = required<BinningState>(num_rendered);
 	char* binning_chunkptr = binningBuffer(binning_chunk_size);
@@ -338,15 +340,17 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 
 	// For each instance to be rendered, produce adequate [ tile | depth ] key 
 	// and corresponding dublicated Gaussian indices to be sorted
-	duplicateWithKeys << <(P + 255) / 256, 256 >> > (
-		P,
+	duplicateWithKeys << <(BR + 255) / 256, 256 >> > (
+		BR, P, B,
 		geomState.means2D,
 		geomState.depths,
 		geomState.point_offsets,
 		binningState.point_list_keys_unsorted,
 		binningState.point_list_unsorted,
 		radii,
-		tile_grid)
+		tile_grid,
+		geomState.point_index,
+		geomState.point_batch_index)
 	CHECK_CUDA(, debug)
 
 	int bit = getHigherMsb(tile_grid.x * tile_grid.y);
@@ -360,24 +364,23 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		num_rendered, 0, 32 + bit), debug)
 
 	CHECK_CUDA(cudaMemset(imgState.ranges, 0, tile_grid.x * tile_grid.y * sizeof(uint2)), debug);
-
 	// Identify start and end of per-tile workloads in sorted list
-	if (num_rendered > 0)
+	if (num_rendered > 0){
 		identifyTileRanges << <(num_rendered + 255) / 256, 256 >> > (
 			num_rendered,
 			binningState.point_list_keys,
 			imgState.ranges);
+	}
 	CHECK_CUDA(, debug)
 
 	// Let each tile blend its range of Gaussians independently in parallel
-	const float* feature_ptr = geomState.rgb;
 	CHECK_CUDA(FORWARD::render(
 		tile_grid, block,
 		imgState.ranges,
 		binningState.point_list,
 		width, height,
 		geomState.means2D,
-		feature_ptr,
+		geomState.rgb,
 		geomState.depths,
 		geomState.conic_opacity,
 		imgState.accum_alpha,
@@ -386,8 +389,9 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		out_color,
 		out_depth,
 		mask,
-		aligned_mask), 1)
-
+		geomState.point_index,
+		geomState.point_batch_index
+	), 1)
 	return std::make_tuple(num_rendered, BR);
 }
 
@@ -423,10 +427,9 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dscale,
 	float* dL_drot,
 	const int* mask,
-	const bool aligned_mask,
 	bool debug)
 {
-	GeometryState geomState = GeometryState::fromChunk(geom_buffer, BR, P);
+	GeometryState geomState = GeometryState::fromChunk(geom_buffer, BR);
 	BinningState binningState = BinningState::fromChunk(binning_buffer, R);
 	ImageState imgState = ImageState::fromChunk(img_buffer, width * height);
 
@@ -461,8 +464,7 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dopacity,
 		dL_dcolor,
 		dL_ddepth,
-		mask,
-		aligned_mask), debug)
+		mask), debug)
 
 	// Take care of the rest of preprocessing. Was the precomputed covariance
 	// given to us or a scales/rot pair? If precomputed, pass that. If not,

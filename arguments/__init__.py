@@ -119,9 +119,8 @@ class OptimizationParams(ParamGroup):
         self.batch_until = -1
         self.batch_partition = False
         self.batch_partition_denom = -1
-        self.mask_grid = False
-        self.mask_height = 16
-        self.mask_width = 16
+        self.mask_height = 8
+        self.mask_width = 8
         self.use_preprocess_mask = False
         self.preprocess_mask_start = 0
         self.batch_iteration_teleport = -1
