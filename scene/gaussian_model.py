@@ -54,6 +54,7 @@ class GaussianModel:
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
         self.xyz_gradient_accum_abs = torch.empty(0)
+        self.shs_gradient_accum = torch.empty(0)
         self.denom = torch.empty(0)
         self.optimizer = None
         self.percent_dense = 0
@@ -72,6 +73,7 @@ class GaussianModel:
             self.max_radii2D,
             self.xyz_gradient_accum,
             self.xyz_gradient_accum_abs,
+            self.shs_gradient_accum,
             self.denom,
             self.optimizer.state_dict(),
             self.spatial_lr_scale,
@@ -88,12 +90,14 @@ class GaussianModel:
         self.max_radii2D, 
         xyz_gradient_accum, 
         xyz_gradient_accum_abs, 
+        shs_gradient_accum,
         denom,
         opt_dict, 
         self.spatial_lr_scale) = model_args
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.xyz_gradient_accum_abs = xyz_gradient_accum_abs
+        self.shs_gradient_accum = shs_gradient_accum
         self.denom = denom
         self.optimizer.load_state_dict(opt_dict)
 
@@ -161,6 +165,7 @@ class GaussianModel:
         self.percent_dense = training_args.percent_dense
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.xyz_gradient_accum_abs = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.shs_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
 
         l = [
@@ -308,6 +313,7 @@ class GaussianModel:
 
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
         self.xyz_gradient_accum_abs = self.xyz_gradient_accum_abs[valid_points_mask]
+        self.shs_gradient_accum = self.shs_gradient_accum[valid_points_mask]
 
         self.denom = self.denom[valid_points_mask]
         self.max_radii2D = self.max_radii2D[valid_points_mask]
@@ -334,7 +340,7 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, reset_params=True):
+    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation):
         d = {"xyz": new_xyz,
         "f_dc": new_features_dc,
         "f_rest": new_features_rest,
@@ -350,11 +356,11 @@ class GaussianModel:
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
 
-        if reset_params:
-            self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-            self.xyz_gradient_accum_abs = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-            self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-            self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.xyz_gradient_accum_abs = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.shs_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
     def replace_tensors_to_optimizer(self, inds=None):
         tensors_dict = {"xyz": self._xyz,
@@ -414,7 +420,7 @@ class GaussianModel:
         return sampled_idxs, ratio
     
 
-    def relocate_gs(self, dead_mask=None):
+    def relocate_gs(self, dead_mask=None, color_cued=False):
         if dead_mask.sum() == 0:
             return
 
@@ -426,7 +432,10 @@ class GaussianModel:
             return
 
         # sample from alive ones based on opacity
-        probs = (self.get_opacity[alive_indices, 0]) 
+        if color_cued:
+            probs = self.shs_gradient_accum[alive_indices, 0]
+        else:
+            probs = self.get_opacity[alive_indices, 0]
         probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
         reinit_idx, ratio = self._sample_alives(alive_indices=alive_indices, probs=probs, num=dead_indices.shape[0])
 
@@ -444,7 +453,7 @@ class GaussianModel:
 
         self.replace_tensors_to_optimizer(inds=reinit_idx) 
         
-    def add_new_gs(self, opt, cap_max, add_ratio=0.05, iteration=None):
+    def add_new_gs(self, opt, cap_max, add_ratio=0.05, iteration=None, color_cued=False):
         current_num_points = self._opacity.shape[0]
 
         target_num = min(cap_max, int((1+add_ratio) * current_num_points))
@@ -452,8 +461,11 @@ class GaussianModel:
 
         if num_gs <= 0:
             return 0
-
-        probs = self.get_opacity.squeeze(-1) 
+        
+        if color_cued:
+            probs = self.shs_gradient_accum.squeeze(-1) 
+        else:
+            probs = self.get_opacity.squeeze(-1) 
         EPS = torch.finfo(torch.float32).eps
         probs = probs / (probs.sum() + EPS)
         
@@ -470,7 +482,7 @@ class GaussianModel:
         self._opacity[add_idx] = new_opacity
         self._scaling[add_idx] = new_scaling
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, reset_params=False)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation)
         self.replace_tensors_to_optimizer(inds=add_idx)
     
     ########## original 3dgs ##########
@@ -546,7 +558,8 @@ class GaussianModel:
         self.prune_points(prune_mask)
         torch.cuda.empty_cache()
 
-    def add_densification_stats(self, viewspace_point_tensor_grad, viewspace_point_tensor_abs_grad, update_filter):
+    def add_densification_stats(self, viewspace_point_tensor_grad, viewspace_point_tensor_abs_grad, shs_grad, update_filter):
         self.xyz_gradient_accum[update_filter] += viewspace_point_tensor_grad[update_filter]
         self.xyz_gradient_accum_abs[update_filter] += viewspace_point_tensor_abs_grad[update_filter]
+        self.shs_gradient_accum[update_filter] += shs_grad[update_filter]
         self.denom[update_filter] += 1

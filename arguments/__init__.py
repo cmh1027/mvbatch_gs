@@ -95,7 +95,6 @@ class OptimizationParams(ParamGroup):
         self.densify_from_iter = 500
         self.densify_until_iter = 25_000
         self.random_background = False
-
         
 
         ### 3dgs ###
@@ -112,21 +111,22 @@ class OptimizationParams(ParamGroup):
         self.noise_lr = 5e5
         self.scale_reg = 0.01
         self.opacity_reg = 0.01
+        self.color_cued = False
+        self.color_cued_coarse_interval = 700
 
         self.batch_sample_strategy = "max" # ["min", "max", "random"]
         self.batch_size = 1
-        self.batch_until = 30000
+        self.batch_until = -1
         self.batch_partition = False
+        self.batch_partition_denom = -1
         self.mask_grid = False
         self.mask_height = 16
         self.mask_width = 16
-        self.priority_mask_sampling = False
-        self.priority_mask_ratio = 1.0
-        self.priority_mask_mode = "max"
         self.use_preprocess_mask = False
         self.preprocess_mask_start = 0
         self.exclusive_update = False
         self.grad_sum = False
+        self.batch_iteration_teleport = -1
 
 
         self.single_partial_rays = False

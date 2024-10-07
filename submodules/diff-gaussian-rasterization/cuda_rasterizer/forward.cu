@@ -161,8 +161,6 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	const float* opacities,
 	const float* shs,
 	bool* clamped,
-	const float* cov3D_precomp,
-	const float* colors_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
 	const glm::vec3* cam_pos,
@@ -177,7 +175,6 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
-	bool prefiltered,
 	const int* mask,
 	const bool aligned_mask,
 	const bool use_preprocess_mask,
@@ -194,7 +191,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 	// Perform near culling, quit if outside.
 	float3 p_view;
-	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
+	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, p_view))
 		return;
 
 	// Transform point by projecting
@@ -206,18 +203,11 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
 	uint32_t vertial_blocks = (H + BLOCK_Y - 1) / BLOCK_Y;
 
-	// If 3D covariance matrix is precomputed, use it, otherwise compute
-	// from scaling and rotation parameters. 
+
 	const float* cov3D;
-	if (cov3D_precomp != nullptr)
-	{
-		cov3D = cov3D_precomp + idx * 6;
-	}
-	else
-	{
-		computeCov3D(scales[idx], scale_modifier, rotations[idx], cov3Ds + idx * 6);
-		cov3D = cov3Ds + idx * 6;
-	}
+	computeCov3D(scales[idx], scale_modifier, rotations[idx], cov3Ds + idx * 6);
+	cov3D = cov3Ds + idx * 6;
+
 
 	// Compute 2D screen-space covariance matrix
 	float3 cov = computeCov2D(p_orig, focal_x, focal_y, tan_fovx, tan_fovy, cov3D, viewmatrix);
@@ -258,15 +248,10 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		}
 	}
 
-	// If colors have been precomputed, use them, otherwise convert
-	// spherical harmonics coefficients to RGB color.
-	if (colors_precomp == nullptr)
-	{
-		glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
-		rgb[idx * C + 0] = result.x;
-		rgb[idx * C + 1] = result.y;
-		rgb[idx * C + 2] = result.z;
-	}
+	glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
+	rgb[idx * C + 0] = result.x;
+	rgb[idx * C + 1] = result.y;
+	rgb[idx * C + 2] = result.z;
 
 	// Store some useful helper data for the next steps.
 	depths[idx] = p_view.z;
@@ -454,8 +439,6 @@ void FORWARD::preprocess(int P, int D, int M,
 	const float* opacities,
 	const float* shs,
 	bool* clamped,
-	const float* cov3D_precomp,
-	const float* colors_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
 	const glm::vec3* cam_pos,
@@ -470,7 +453,6 @@ void FORWARD::preprocess(int P, int D, int M,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
-	bool prefiltered,
 	const int* mask,
 	const bool aligned_mask,
 	const bool use_preprocess_mask,
@@ -485,8 +467,6 @@ void FORWARD::preprocess(int P, int D, int M,
 		opacities,
 		shs,
 		clamped,
-		cov3D_precomp,
-		colors_precomp,
 		viewmatrix, 
 		projmatrix,
 		cam_pos,
@@ -501,7 +481,6 @@ void FORWARD::preprocess(int P, int D, int M,
 		conic_opacity,
 		grid,
 		tiles_touched,
-		prefiltered,
 		mask,
 		aligned_mask,
 		use_preprocess_mask,
