@@ -124,8 +124,6 @@ class OptimizationParams(ParamGroup):
         self.mask_width = 16
         self.use_preprocess_mask = False
         self.preprocess_mask_start = 0
-        self.exclusive_update = False
-        self.grad_sum = False
         self.batch_iteration_teleport = -1
 
 

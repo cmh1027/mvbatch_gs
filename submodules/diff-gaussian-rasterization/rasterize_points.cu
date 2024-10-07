@@ -28,12 +28,13 @@
 std::function<char*(size_t N)> resizeFunctional(torch::Tensor& t) {
     auto lambda = [&t](size_t N) {
         t.resize_({(long long)N});
+		t.fill_(0);
 		return reinterpret_cast<char*>(t.contiguous().data_ptr());
     };
     return lambda;
 }
 
-std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<int, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
@@ -62,7 +63,6 @@ RasterizeGaussiansCUDA(
 	const int H = image_height;
 	const int W = image_width;
 	const int B = viewmatrix.size(0);
-
 	auto int_opts = means3D.options().dtype(torch::kInt32);
 	auto float_opts = means3D.options().dtype(torch::kFloat32);
 
@@ -80,6 +80,7 @@ RasterizeGaussiansCUDA(
 	std::function<char*(size_t)> imgFunc = resizeFunctional(imgBuffer);
 	
 	int rendered = 0;
+	int batch_rendered = 0;
 	if(P != 0)
 	{
 		int M = 0;
@@ -88,7 +89,7 @@ RasterizeGaussiansCUDA(
 			M = sh.size(1);
 		}
 
-		rendered = CudaRasterizer::Rasterizer::forward(
+		auto returned = CudaRasterizer::Rasterizer::forward(
 			geomFunc,
 			binningFunc,
 			imgFunc,
@@ -112,8 +113,10 @@ RasterizeGaussiansCUDA(
 			mask.contiguous().data<int>(),
 			aligned_mask,
 			debug);
+		rendered = std::get<0>(returned);
+		batch_rendered = std::get<0>(returned);
 	}
-	return std::make_tuple(rendered, out_color, out_depth, radii, geomBuffer, binningBuffer, imgBuffer);
+	return std::make_tuple(rendered, batch_rendered, out_color, out_depth, radii, geomBuffer, binningBuffer, imgBuffer);
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -135,6 +138,7 @@ RasterizeGaussiansBackwardCUDA(
 	const torch::Tensor& campos,
 	const torch::Tensor& geomBuffer,
 	const int R,
+	const int BR,
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
 	const torch::Tensor& mask,
@@ -164,7 +168,7 @@ RasterizeGaussiansBackwardCUDA(
   
 	if(P != 0)
 	{  
-		CudaRasterizer::Rasterizer::backward(P, degree, M, R,
+		CudaRasterizer::Rasterizer::backward(P, degree, M, R, BR,
 		background.contiguous().data<float>(),
 		W, H, 
 		means3D.contiguous().data<float>(),

@@ -65,6 +65,22 @@ __global__ void checkFrustum(int P,
 	present[idx] = in_frustum(idx, orig_points, viewmatrix, projmatrix, p_view);
 }
 
+__global__ void savePointIndex(
+	int P,
+	const int* batch_num_rendered,
+    const int* batch_num_rendered_sums,
+	int* point_index)
+{
+	auto idx = cg::this_grid().thread_rank();
+	if (idx >= P)
+		return;
+	int num_rendered = batch_num_rendered[idx];
+	int num_rendered_offset = (idx == 0) ? 0 : batch_num_rendered_sums[idx-1];
+	for(int i=0; i<num_rendered; ++i){
+		point_index[num_rendered_offset+i] = idx;
+	}
+}
+
 // Generates one key/value pair for all Gaussian / tile overlaps. 
 // Run once per Gaussian (1:N mapping).
 __global__ void duplicateWithKeys(
@@ -165,6 +181,8 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 	cub::DeviceScan::InclusiveSum(nullptr, geom.scan_size, geom.tiles_touched, geom.tiles_touched, P);
 	obtain(chunk, geom.scanning_space, geom.scan_size, 128);
 	obtain(chunk, geom.point_offsets, P, 128);
+
+	obtain(chunk, geom.point_index, P, 128);
 	return geom;
 }
 
@@ -194,7 +212,7 @@ CudaRasterizer::BinningState CudaRasterizer::BinningState::fromChunk(char*& chun
 
 // Forward rendering procedure for differentiable rasterization
 // of Gaussians.
-int CudaRasterizer::Rasterizer::forward(
+std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 	std::function<char* (size_t)> geometryBuffer,
 	std::function<char* (size_t)> binningBuffer,
 	std::function<char* (size_t)> imageBuffer,
@@ -220,13 +238,46 @@ int CudaRasterizer::Rasterizer::forward(
 {
 	const float focal_y = height / (2.0f * tan_fovy);
 	const float focal_x = width / (2.0f * tan_fovx);
-
-	size_t chunk_size = required<GeometryState>(P);
-	char* chunkptr = geometryBuffer(chunk_size);
-	GeometryState geomState = GeometryState::fromChunk(chunkptr, P);
-
 	dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
 	dim3 block(BLOCK_X, BLOCK_Y, 1);
+
+	int* batch_num_rendered;
+    int* batch_num_rendered_sums;
+	int batch_num_rendered_sum;
+	cudaMalloc(&batch_num_rendered, sizeof(int) * P);
+	cudaMemset(batch_num_rendered, 0, sizeof(int) * P);
+	cudaMalloc(&batch_num_rendered_sums, sizeof(int) * P);
+	CHECK_CUDA(FORWARD::measureBufferSize(
+		P, D, M, B,
+		means3D,
+		(glm::vec3*)scales,
+		scale_modifier,
+		(glm::vec4*)rotations,
+		viewmatrix, projmatrix,
+		(glm::vec3*)cam_pos,
+		width, height,
+		focal_x, focal_y,
+		tan_fovx, tan_fovy,
+		tile_grid,
+		batch_num_rendered
+	), 1)
+
+    void *d_temp_storage = nullptr;
+    size_t temp_storage_bytes = 0;
+
+    cub::DeviceScan::InclusiveSum(nullptr, temp_storage_bytes, batch_num_rendered, batch_num_rendered_sums, P);
+    cudaMalloc(&d_temp_storage, temp_storage_bytes);
+    cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, batch_num_rendered, batch_num_rendered_sums, P);
+	cudaFree(d_temp_storage);
+	cudaMemcpy(&batch_num_rendered_sum, batch_num_rendered_sums + P - 1, sizeof(int), cudaMemcpyDeviceToHost);
+
+	size_t chunk_size = required<GeometryState>(batch_num_rendered_sum);
+	char* chunkptr = geometryBuffer(chunk_size);
+	GeometryState geomState = GeometryState::fromChunk(chunkptr, batch_num_rendered_sum);
+
+	cudaMemset(geomState.point_index, 0, sizeof(int) * batch_num_rendered_sum);
+	savePointIndex << <(P + 255) / 256, 256 >> > (P, batch_num_rendered, batch_num_rendered_sums, geomState.point_index);
+
 
 	// Dynamically resize image-based auxiliary buffers during training
 	size_t img_chunk_size = required<ImageState>(width * height);
@@ -255,8 +306,7 @@ int CudaRasterizer::Rasterizer::forward(
 		geomState.rgb,
 		geomState.conic_opacity,
 		tile_grid,
-		geomState.tiles_touched,
-		mask
+		geomState.tiles_touched
 	), 1)
 
 	// Compute prefix sum over full list of touched tile counts by Gaussians
@@ -323,13 +373,15 @@ int CudaRasterizer::Rasterizer::forward(
 		mask,
 		aligned_mask), 1)
 
-	return num_rendered;
+	cudaFree(batch_num_rendered);
+	cudaFree(batch_num_rendered_sums);
+	return std::make_tuple(num_rendered, batch_num_rendered_sum);
 }
 
 // Produce necessary gradients for optimization, corresponding
 // to forward render pass
 void CudaRasterizer::Rasterizer::backward(
-	const int P, int D, int M, int R,
+	const int P, int D, int M, int R, int BR,
 	const float* background,
 	const int width, int height,
 	const float* means3D,
@@ -361,7 +413,7 @@ void CudaRasterizer::Rasterizer::backward(
 	const bool aligned_mask,
 	bool debug)
 {
-	GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
+	GeometryState geomState = GeometryState::fromChunk(geom_buffer, BR);
 	BinningState binningState = BinningState::fromChunk(binning_buffer, R);
 	ImageState imgState = ImageState::fromChunk(img_buffer, width * height);
 

@@ -39,6 +39,7 @@ namespace CudaRasterizer
 		float* rgb;
 		uint32_t* point_offsets;
 		uint32_t* tiles_touched;
+		int* point_index;
 
 		static GeometryState fromChunk(char*& chunk, size_t P);
 	};
@@ -71,4 +72,5 @@ namespace CudaRasterizer
 		T::fromChunk(size, P);
 		return ((size_t)size) + 128;
 	}
+
 };

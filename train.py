@@ -19,7 +19,7 @@ from lpipsPyTorch import lpips
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
-from utils.general_utils import safe_state, mask_schedule
+from utils.general_utils import safe_state
 from tqdm import tqdm
 from utils.image_utils import psnr, apply_depth_colormap, pcoef_freq
 from argparse import ArgumentParser, Namespace
@@ -139,81 +139,74 @@ def training(dataset, opt, pipe, args):
             cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, strategy=opt.batch_sample_strategy)
 
         cams = [viewpoints[min(idx, len(viewpoints)-1)] for idx in cam_idxs]
-        vis_ratios = []
-        use_preprocess_mask = mask_schedule(opt, iteration)
 
+        vis_ratios = []
         batch_vs = []
         batch_shs = []
         batch_radii = torch.zeros_like(gaussians.get_opacity[..., 0], dtype=torch.int32)
         visibility_count = torch.zeros_like(gaussians.get_opacity[..., 0], dtype=torch.uint8)
-        
-        if opt.exclusive_update:
-            gradient_mask = torch.ones(gaussians.get_xyz.shape[0], dtype=torch.bool, device=torch.device('cuda'))
+
+        #########################
+        bg = torch.rand((3), device="cuda") if opt.random_background else background
+        if n_rays == (H * W):
+            pmask = None
         else:
-            gradient_mask = None
-
-        for idx, viewpoint_cam in enumerate(cams):
-            bg = torch.rand((3), device="cuda") if opt.random_background else background
-            if n_rays == (H * W):
-                pmask = None
+            raise NotImplementedError
+            if opt.mask_grid:
+                pmask = torch.zeros(partial_height*partial_width, dtype=torch.int32, device=torch.device('cuda'))
+                indices = torch.randperm(len(pmask), device=torch.device('cuda'))[:partial_n_rays]
+                pmask[indices] = 1
+                pmask = pmask.view(partial_height, partial_width)
             else:
-                if opt.mask_grid:
-                    pmask = torch.zeros(partial_height*partial_width, dtype=torch.int32, device=torch.device('cuda'))
-                    indices = torch.randperm(len(pmask), device=torch.device('cuda'))[:partial_n_rays]
-                    pmask[indices] = 1
-                    pmask = pmask.view(partial_height, partial_width)
-                else:
-                    pmask = torch.zeros(H*W, dtype=torch.int32, device=torch.device('cuda'))
-                    pmask[torch.randperm(len(pmask), device=torch.device('cuda'))[:n_rays]] = 1
+                pmask = torch.zeros(H*W, dtype=torch.int32, device=torch.device('cuda'))
+                pmask[torch.randperm(len(pmask), device=torch.device('cuda'))[:n_rays]] = 1
 
-            kwargs = {
-                'mask' : pmask,
-                'aligned_mask' : opt.mask_grid,
-                'use_preprocess_mask' : use_preprocess_mask,
-                'gradient_mask' : gradient_mask
-            }
-            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, **kwargs)
-            (image, depth, viewspace_point_tensor, visibility_filter, radii, shs_grad) = (
-                render_pkg["render"][:3, ...], 
-                render_pkg["depth"],
-                render_pkg["viewspace_points"], 
-                render_pkg["visibility_filter"], 
-                render_pkg["radii"],
-                render_pkg["shs_grad"]
-            )
+        kwargs = {
+            'mask' : pmask,
+            'aligned_mask' : opt.mask_grid
+        }
+        render_pkg = render(cams, gaussians, pipe, bg, **kwargs)
+        raise NotImplementedError
+        (image, depth, viewspace_point_tensor, visibility_filter, radii, shs_grad) = (
+            render_pkg["render"][:3, ...], 
+            render_pkg["depth"],
+            render_pkg["viewspace_points"], 
+            render_pkg["visibility_filter"], 
+            render_pkg["radii"],
+            render_pkg["shs_grad"]
+        )
 
-            visibility_count = visibility_count + visibility_filter.to(visibility_count.dtype)
-            batch_vs += [viewspace_point_tensor]
-            batch_shs += [shs_grad]
-            batch_radii = torch.maximum(radii, batch_radii)
+        visibility_count = visibility_count + visibility_filter.to(visibility_count.dtype)
+        batch_vs += [viewspace_point_tensor]
+        batch_shs += [shs_grad]
+        batch_radii = torch.maximum(radii, batch_radii)
 
-            # Loss
-            gt_image = viewpoint_cam.original_image.cuda()
-            gt_images += [gt_image.cpu()]
-            if pmask is None:
-                loss_mask = None
+        # Loss
+        gt_image = viewpoint_cam.original_image.cuda()
+        gt_images += [gt_image.cpu()]
+        if pmask is None:
+            loss_mask = None
+        else:
+            if opt.mask_grid:
+                loss_mask = torch.zeros(H, W, device=torch.device('cuda'))
+                pmask_expand = torch.kron(pmask, torch.ones(opt.mask_height, opt.mask_width, device=torch.device('cuda')))
+                loss_mask[:, :] = pmask_expand[:H, :W]
             else:
-                if opt.mask_grid:
-                    loss_mask = torch.zeros(H, W, device=torch.device('cuda'))
-                    pmask_expand = torch.kron(pmask, torch.ones(opt.mask_height, opt.mask_width, device=torch.device('cuda')))
-                    loss_mask[:, :] = pmask_expand[:H, :W]
-                else:
-                    loss_mask = pmask.view(H, W).to(torch.float)
+                loss_mask = pmask.view(H, W).to(torch.float)
 
-            E_u, Ll1 = l1_loss(image, gt_image, mask=loss_mask)
-                    
-            lambda_dssim = opt.lambda_dssim
-            loss = (1.0 - lambda_dssim) * Ll1
-            if lambda_dssim > 0:
-                ssim_map = ssim(image, gt_image, mask=loss_mask)
-                ssim_loss = 1 - ssim_map
-                loss += lambda_dssim * ssim_loss.mean()
-            if not opt.grad_sum:
-                loss = loss / len(cams)
-            loss.backward()
-            
-            if opt.exclusive_update:
-                gradient_mask = gradient_mask & (gaussians._opacity.grad.squeeze().abs() == 0.)
+        E_u, Ll1 = l1_loss(image, gt_image, mask=loss_mask)
+                
+        lambda_dssim = opt.lambda_dssim
+        loss = (1.0 - lambda_dssim) * Ll1
+        if lambda_dssim > 0:
+            ssim_map = ssim(image, gt_image, mask=loss_mask)
+            ssim_loss = 1 - ssim_map
+            loss += lambda_dssim * ssim_loss.mean()
+
+        loss = loss / len(cams)
+        loss.backward()
+
+        #########################
 
         if not opt.evaluate_time:
             vis_ratios.append(((gaussians._opacity.grad != 0).sum() / len(gaussians._opacity)).item())

@@ -15,8 +15,7 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, 
-           override_color = None, mask=None, aligned_mask=False, use_preprocess_mask=False, mask_window=0, gradient_mask=None):
+def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, mask=None, aligned_mask=False):
     """
     Render the scene. 
     
@@ -31,33 +30,39 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         shs_grad.retain_grad()
     except:
         pass
-    
+    if type(viewpoint_cameras) is not list:
+        viewpoint_cameras = [viewpoint_cameras]
+    if len(viewpoint_cameras) >= 2:
+        assert viewpoint_cameras[0].image_height == viewpoint_cameras[1].image_height
+        assert math.tan(viewpoint_cameras[0].FoVx * 0.5) == math.tan(viewpoint_cameras[1].FoVx * 0.5)
 
     if mask is None:
-        mask = torch.ones(viewpoint_camera.image_height*viewpoint_camera.image_width, dtype=torch.int32, device=torch.device('cuda'))
-        aligned_mask = False
+        mask = torch.ones(len(viewpoint_cameras), viewpoint_cameras[0].image_height*viewpoint_cameras[0].image_width, dtype=torch.int32, device=torch.device('cuda'))
+        assert not aligned_mask
 
     # Set up rasterization configuration
-    tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
-    tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
+    tanfovx = math.tan(viewpoint_cameras[0].FoVx * 0.5)
+    tanfovy = math.tan(viewpoint_cameras[0].FoVy * 0.5)
+    image_height = int(viewpoint_cameras[0].image_height)
+    image_width = int(viewpoint_cameras[0].image_width)
+    viewmatrix = torch.stack([cam.world_view_transform for cam in viewpoint_cameras])
+    projmatrix = torch.stack([cam.full_proj_transform for cam in viewpoint_cameras])
+    campos = torch.stack([cam.camera_center for cam in viewpoint_cameras])
 
     raster_settings = GaussianRasterizationSettings(
-        image_height=int(viewpoint_camera.image_height),
-        image_width=int(viewpoint_camera.image_width),
+        image_height=image_height,
+        image_width=image_width,
         tanfovx=tanfovx,
         tanfovy=tanfovy,
         bg=bg_color,
         scale_modifier=scaling_modifier,
-        viewmatrix=viewpoint_camera.world_view_transform,
-        projmatrix=viewpoint_camera.full_proj_transform,
+        viewmatrix=viewmatrix,
+        projmatrix=projmatrix,
         sh_degree=pc.active_sh_degree,
-        campos=viewpoint_camera.camera_center,
+        campos=campos,
         mask=mask,
         debug=pipe.debug,
-        aligned_mask=aligned_mask,
-        use_preprocess_mask=use_preprocess_mask,
-        mask_window=mask_window,
-        gradient_mask=gradient_mask
+        aligned_mask=aligned_mask
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
