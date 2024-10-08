@@ -420,7 +420,7 @@ class GaussianModel:
         return sampled_idxs, ratio
     
 
-    def relocate_gs(self, dead_mask=None, color_cued=False):
+    def relocate_gs(self, dead_mask=None):
         if dead_mask.sum() == 0:
             return
 
@@ -432,10 +432,7 @@ class GaussianModel:
             return
 
         # sample from alive ones based on opacity
-        if color_cued:
-            probs = self.shs_gradient_accum[alive_indices, 0]
-        else:
-            probs = self.get_opacity[alive_indices, 0]
+        probs = self.get_opacity[alive_indices, 0]
         probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
         reinit_idx, ratio = self._sample_alives(alive_indices=alive_indices, probs=probs, num=dead_indices.shape[0])
 
@@ -453,7 +450,7 @@ class GaussianModel:
 
         self.replace_tensors_to_optimizer(inds=reinit_idx) 
         
-    def add_new_gs(self, opt, cap_max, add_ratio=0.05, iteration=None, color_cued=False):
+    def add_new_gs(self, opt, cap_max, add_ratio=0.05, iteration=None):
         current_num_points = self._opacity.shape[0]
 
         target_num = min(cap_max, int((1+add_ratio) * current_num_points))
@@ -462,10 +459,8 @@ class GaussianModel:
         if num_gs <= 0:
             return 0
         
-        if color_cued:
-            probs = self.shs_gradient_accum.squeeze(-1) 
-        else:
-            probs = self.get_opacity.squeeze(-1) 
+
+        probs = self.get_opacity.squeeze(-1) 
         EPS = torch.finfo(torch.float32).eps
         probs = probs / (probs.sum() + EPS)
         

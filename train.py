@@ -147,9 +147,12 @@ def training(dataset, opt, pipe, args):
 
         bg = torch.rand((3), device="cuda") if opt.random_background else background
 
-        # pmask = torch.zeros(partial_height*partial_width, dtype=torch.int32, device=torch.device('cuda'))
-        pmask = torch.randint(0, len(cams), (partial_height, partial_width), dtype=torch.int32, device=torch.device('cuda'))
+        pmask = torch.zeros(partial_height, partial_width, dtype=torch.int32, device=torch.device('cuda')).fill_(2)
+        # pmask = torch.randint(0, len(cams), (partial_height, partial_width), dtype=torch.int32, device=torch.device('cuda'))
+        pmask = None
         render_pkg = render(cams, gaussians, pipe, bg, mask=pmask)
+        save_image(render_pkg["render"][:3, ...], "temp.png")
+        breakpoint()
         (image, depth, viewspace_point_tensor, visibility_filter, radii, shs_grad) = (
             render_pkg["render"][:3, ...], 
             render_pkg["depth"],
@@ -158,6 +161,7 @@ def training(dataset, opt, pipe, args):
             render_pkg["radii"],
             render_pkg["shs_grad"]
         )
+        
 
         visibility_count = visibility_count + visibility_filter.to(visibility_count.dtype)
         batch_vs += [viewspace_point_tensor]
@@ -244,16 +248,8 @@ def training(dataset, opt, pipe, args):
                         gaussians.densify_and_prune(opt, opt.opacity_reset_threshold / 2, scene.cameras_extent, size_threshold, iteration)
                     elif opt.gs_type == "mcmc":
                         dead_mask = (gaussians.get_opacity <= 0.005).squeeze(-1)
-                        if opt.color_cued:
-                            assert opt.color_cued_coarse_interval % opt.densification_interval == 0
-                            if iteration % opt.color_cued_coarse_interval == 0:
-                                color_cued = False
-                            else:
-                                color_cued = True
-                        else:
-                            color_cued = False
                         gaussians.relocate_gs(dead_mask=dead_mask)
-                        gaussians.add_new_gs(opt, cap_max=args.cap_max, add_ratio=opt.add_ratio, iteration=iteration, color_cued=color_cued)
+                        gaussians.add_new_gs(opt, cap_max=args.cap_max, add_ratio=opt.add_ratio, iteration=iteration)
                     
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     if opt.gs_type == "original":

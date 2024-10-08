@@ -34,7 +34,7 @@ std::function<char*(size_t N)> resizeFunctional(torch::Tensor& t) {
     return lambda;
 }
 
-std::tuple<int, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<int, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
@@ -51,15 +51,20 @@ RasterizeGaussiansCUDA(
 	const torch::Tensor& sh,
 	const int degree,
 	const torch::Tensor& campos,
-	const torch::Tensor& mask,
+	torch::Tensor& mask,
 	const bool debug)
 {
 	if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
 		AT_ERROR("means3D must have dimensions (num_points, 3)");
 	}
-	assert(mask.size(0) == (image_height + BLOCK_Y) / BLOCK_Y);
-	assert(mask.size(1) == (image_width + BLOCK_X) / BLOCK_X);
 
+	if(mask.ndimension() == 0){
+		mask = torch::full({(image_height + BLOCK_Y) / BLOCK_Y, (image_width + BLOCK_X) / BLOCK_X}, 0, means3D.options().dtype(torch::kInt32));
+	}
+	else{
+		assert(mask.size(0) == (image_height + BLOCK_Y) / BLOCK_Y);
+		assert(mask.size(1) == (image_width + BLOCK_X) / BLOCK_X);
+	}
 
 	const int P = means3D.size(0);
 	const int H = image_height;
@@ -117,7 +122,7 @@ RasterizeGaussiansCUDA(
 		rendered = std::get<0>(returned);
 		batch_rendered = std::get<0>(returned);
 	}
-	return std::make_tuple(rendered, batch_rendered, out_color, out_depth, radii, geomBuffer, binningBuffer, imgBuffer);
+	return std::make_tuple(rendered, batch_rendered, out_color, out_depth, radii, geomBuffer, binningBuffer, imgBuffer, mask);
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -142,13 +147,13 @@ RasterizeGaussiansBackwardCUDA(
 	const int BR,
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
-	const torch::Tensor& mask,
+	torch::Tensor& mask,
 	const bool debug) 
 {
 	const int P = means3D.size(0);
 	const int H = dL_dout_color.size(1);
 	const int W = dL_dout_color.size(2);
-	
+
 	int M = 0;
 	if(sh.size(0) != 0)
 	{	

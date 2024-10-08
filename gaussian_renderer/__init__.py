@@ -48,8 +48,7 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
 
 
     if mask is None:
-        raise NotImplementedError
-        mask = torch.zeros(image_height*image_width, dtype=torch.int32, device=torch.device('cuda'))
+        mask = torch.tensor(0)
 
     raster_settings = GaussianRasterizationSettings(
         image_height=image_height,

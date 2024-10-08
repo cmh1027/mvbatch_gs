@@ -89,7 +89,7 @@ __global__ void savePointIndex(
 // Generates one key/value pair for all Gaussian / tile overlaps. 
 // Run once per Gaussian (1:N mapping).
 __global__ void duplicateWithKeys(
-	int BR, int P, int B,
+	int BR, int P, int B, int W,
 	const float2* points_xy,
 	const float* depths,
 	const uint32_t* offsets,
@@ -97,6 +97,7 @@ __global__ void duplicateWithKeys(
 	uint32_t* gaussian_values_unsorted,
 	const int* radii,
 	dim3 grid,
+	const int* mask,
 	const int* point_index,
 	const int* point_batch_index)
 {
@@ -120,16 +121,19 @@ __global__ void duplicateWithKeys(
 		// and the value is the ID of the Gaussian. Sorting the values 
 		// with this key yields Gaussian IDs in a list, such that they
 		// are first sorted by tile and then by depth. 
+		uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
 		for (int y = rect_min.y; y < rect_max.y; y++)
 		{
 			for (int x = rect_min.x; x < rect_max.x; x++)
 			{
-				uint64_t key = y * grid.x + x;
-				key <<= 32;
-				key |= *((uint32_t*)&depths[idx]);
-				gaussian_keys_unsorted[off] = key;
-				gaussian_values_unsorted[off] = idx;
-				off++;
+				if(mask[y * horizontal_blocks + x] == batch_idx){
+					uint64_t key = y * grid.x + x;
+					key <<= 32;
+					key |= *((uint32_t*)&depths[idx]);
+					gaussian_keys_unsorted[off] = key;
+					gaussian_values_unsorted[off] = idx;
+					off++;
+				}
 			}
 		}
 	}
@@ -270,6 +274,7 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		focal_x, focal_y,
 		tan_fovx, tan_fovy,
 		tile_grid,
+		mask,
 		batch_num_rendered,
 		batch_rendered_check
 	), 1)
@@ -321,6 +326,7 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		geomState.conic_opacity,
 		tile_grid,
 		geomState.tiles_touched,
+		mask,
 		geomState.point_index,
 		geomState.point_batch_index
 	), 1)
@@ -341,7 +347,7 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 	// For each instance to be rendered, produce adequate [ tile | depth ] key 
 	// and corresponding dublicated Gaussian indices to be sorted
 	duplicateWithKeys << <(BR + 255) / 256, 256 >> > (
-		BR, P, B,
+		BR, P, B, width,
 		geomState.means2D,
 		geomState.depths,
 		geomState.point_offsets,
@@ -349,6 +355,7 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		binningState.point_list_unsorted,
 		radii,
 		tile_grid,
+		mask,
 		geomState.point_index,
 		geomState.point_batch_index)
 	CHECK_CUDA(, debug)

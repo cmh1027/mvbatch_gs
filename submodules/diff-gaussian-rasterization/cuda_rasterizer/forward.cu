@@ -163,6 +163,7 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	const float tan_fovx, float tan_fovy,
 	const float focal_x, float focal_y,
 	const dim3 grid,
+	const int* mask,
 	int* batch_num_rendered,
 	bool* batch_rendered_check)
 {
@@ -205,7 +206,15 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
 	uint2 rect_min, rect_max;
 	getRect(point_image, my_radius, rect_min, rect_max, grid);
-	auto tiles = (rect_max.x - rect_min.x) * (rect_max.y - rect_min.y);
+	// auto tiles = (rect_max.x - rect_min.x) * (rect_max.y - rect_min.y);
+	uint tiles = 0;
+	for (int y = rect_min.y; y < rect_max.y; y++)
+	{
+		for (int x = rect_min.x; x < rect_max.x; x++)
+		{
+			if(mask[y * horizontal_blocks + x] == batch_idx) ++tiles;
+		}
+	}
 	if (tiles == 0)
 		return;
 	atomicAdd(batch_num_rendered + idx, 1);
@@ -235,6 +244,7 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
+	const int* mask,
 	const int* point_index,
 	const int* point_batch_index
 )
@@ -293,7 +303,15 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
 	uint2 rect_min, rect_max;
 	getRect(point_image, my_radius, rect_min, rect_max, grid);
-	auto tiles = (rect_max.x - rect_min.x) * (rect_max.y - rect_min.y);
+	// auto tiles = (rect_max.x - rect_min.x) * (rect_max.y - rect_min.y);
+	uint tiles = 0;
+	for (int y = rect_min.y; y < rect_max.y; y++)
+	{
+		for (int x = rect_min.x; x < rect_max.x; x++)
+		{
+			if(mask[y * horizontal_blocks + x] == batch_idx) ++tiles;
+		}
+	}
 	if (tiles == 0)
 		return;
 
@@ -507,6 +525,7 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
+	const int* mask,
 	const int* point_index,
 	const int* point_batch_index
 )
@@ -534,6 +553,7 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 		conic_opacity,
 		grid,
 		tiles_touched,
+		mask,
 		point_index,
 		point_batch_index
 	);
@@ -552,6 +572,7 @@ void FORWARD::measureBufferSize(int P, int D, int M, int B,
 	const float focal_x, float focal_y,
 	const float tan_fovx, float tan_fovy,
 	const dim3 grid,
+	const int* mask,
 	int* batch_num_rendered,
 	bool* batch_rendered_check
 )
@@ -569,6 +590,7 @@ void FORWARD::measureBufferSize(int P, int D, int M, int B,
 		tan_fovx, tan_fovy,
 		focal_x, focal_y,
 		grid,
+		mask,
 		batch_num_rendered,
 		batch_rendered_check
 	);

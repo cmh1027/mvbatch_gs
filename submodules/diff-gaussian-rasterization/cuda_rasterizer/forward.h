@@ -34,6 +34,7 @@ namespace FORWARD
 		const float focal_x, float focal_y,
 		const float tan_fovx, float tan_fovy,
 		const dim3 grid,
+		const int* mask,
 		int* batch_num_rendered,
 		bool* batch_rendered_check
 	);
@@ -60,6 +61,7 @@ namespace FORWARD
 		float4* conic_opacity,
 		const dim3 grid,
 		uint32_t* tiles_touched,
+		const int* mask,
 		const int* point_index,
 		const int* point_batch_index
 	);

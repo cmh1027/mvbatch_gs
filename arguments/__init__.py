@@ -111,8 +111,6 @@ class OptimizationParams(ParamGroup):
         self.noise_lr = 5e5
         self.scale_reg = 0.01
         self.opacity_reg = 0.01
-        self.color_cued = False
-        self.color_cued_coarse_interval = 700
 
         self.batch_sample_strategy = "max" # ["min", "max", "random"]
         self.batch_size = 1
