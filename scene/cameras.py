@@ -17,8 +17,7 @@ from torchvision.utils import save_image
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid,
-                 trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda"
-                 ):
+                 trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", mask_height=0, mask_width=0):
         super(Camera, self).__init__()
 
         self.uid = uid
@@ -57,8 +56,17 @@ class Camera(nn.Module):
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy, 
                                                      W=self.image_width, H=self.image_height).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
+        self.translated_projs = {(0, 0):self.projection_matrix}
+        for y in range(mask_height):
+            for x in range(mask_width):
+                if x == 0 and y == 0: continue
+                self.translated_projs[(y, x)] = self._translate_proj(self, y, x)
+                
     
     def translate_proj(self, offset_y, offset_x):
+        return self.translated_projs[(offset_y, offset_x)]
+
+    def _translate_proj(self, offset_y, offset_x):
         if offset_x == 0 and offset_y == 0:
             return self.full_proj_transform
         projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy, 
@@ -85,9 +93,6 @@ class Camera(nn.Module):
             gt_image[:, -offset_y:, -offset_x:] = self.original_image[:, :offset_y, :offset_x]
             unmasked[:, -offset_y:, -offset_x:] = 1
         return gt_image, unmasked
-
-        
-
     
 class MiniCam:
     def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform):

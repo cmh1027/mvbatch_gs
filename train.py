@@ -91,12 +91,12 @@ def training(dataset, opt, pipe, args):
 		else:
 			n_rays = (H * W) 
 
-	partial_n_rays = n_rays // (opt.mask_width * opt.mask_height)
-	partial_height = (H + opt.mask_height - 1) // opt.mask_height
-	partial_width = (W + opt.mask_width - 1) // opt.mask_width
+	partial_n_rays = n_rays // (dataset.mask_width * dataset.mask_height)
+	partial_height = (H + dataset.mask_height - 1) // dataset.mask_height
+	partial_width = (W + dataset.mask_width - 1) // dataset.mask_width
 			
 	print(f"Image ({H} x {W} = {H * W}), n_rays : {n_rays}")
-	print(f"tile size {opt.mask_height} x {opt.mask_width}")
+	print(f"tile size {dataset.mask_height} x {dataset.mask_width}")
 
 	start_time = time.time()
 	for iteration in range(first_iter, opt.iterations + 1): 
@@ -137,7 +137,7 @@ def training(dataset, opt, pipe, args):
 
 		pmask = torch.randint(0, len(cams), (partial_height, partial_width), dtype=torch.int32, device=torch.device('cuda'))
 		if opt.random_grid_movement and len(cams) > 1:
-			grid_t = torch.cat([torch.randint(-opt.mask_height+1, opt.mask_height, (len(cams), 1)), torch.randint(-opt.mask_width+1, opt.mask_width, (len(cams), 1))], dim=-1).cuda() # (N, 2
+			grid_t = torch.cat([torch.randint(-dataset.mask_height+1, dataset.mask_height, (len(cams), 1)), torch.randint(-dataset.mask_width+1, dataset.mask_width, (len(cams), 1))], dim=-1).cuda() # (N, 2
 		else:
 			grid_t = torch.zeros(len(cams), 2, device=torch.device('cuda'), dtype=torch.int32)
 
@@ -162,7 +162,7 @@ def training(dataset, opt, pipe, args):
 
 		
 		collage_mask = torch.zeros(H, W, device=torch.device('cuda'), dtype=torch.int64)
-		pmask_expand = torch.kron(pmask, torch.ones(opt.mask_height, opt.mask_width, device=torch.device('cuda')))
+		pmask_expand = torch.kron(pmask, torch.ones(dataset.mask_height, dataset.mask_width, device=torch.device('cuda')))
 		collage_mask[:, :] = pmask_expand[:H, :W]
 		collage_mask = collage_mask.unsqueeze(0).repeat(3,1,1)
 		collage_gt = torch.gather(gt_images, 0, collage_mask.unsqueeze(0)).squeeze(0)
