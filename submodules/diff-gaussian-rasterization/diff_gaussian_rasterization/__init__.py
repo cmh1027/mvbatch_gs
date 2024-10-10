@@ -100,8 +100,8 @@ class _RasterizeGaussians(torch.autograd.Function):
         num_rendered = ctx.num_rendered
         batch_num_rendered = ctx.batch_num_rendered
         raster_settings = ctx.raster_settings
-        means3D, scales, rotations,radii, sh, geomBuffer, binningBuffer, imgBuffer, mask = ctx.saved_tensors
-
+        means3D, scales, rotations, radii, sh, geomBuffer, binningBuffer, imgBuffer, mask = ctx.saved_tensors
+        
         # Restructure args as C++ method expects them
         args = (raster_settings.bg,
                 means3D, 

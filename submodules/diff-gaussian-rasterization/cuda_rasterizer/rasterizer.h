@@ -52,7 +52,7 @@ namespace CudaRasterizer
 			bool debug = false);
 
 		static void backward(
-			const int P, int D, int M, int R, int BR,
+			const int P, int D, int M, int B, int R, int BR,
 			const float* background,
 			const int width, int height,
 			const float* means3D,
@@ -81,6 +81,7 @@ namespace CudaRasterizer
 			float* dL_dscale,
 			float* dL_drot,
 			const int* mask,
+			int* point_idx,
 			bool debug);
 	};
 };

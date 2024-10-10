@@ -62,8 +62,8 @@ RasterizeGaussiansCUDA(
 		mask = torch::full({(image_height + BLOCK_Y) / BLOCK_Y, (image_width + BLOCK_X) / BLOCK_X}, 0, means3D.options().dtype(torch::kInt32));
 	}
 	else{
-		assert(mask.size(0) == (image_height + BLOCK_Y) / BLOCK_Y);
-		assert(mask.size(1) == (image_width + BLOCK_X) / BLOCK_X);
+		assert(mask.size(0) == (image_height + BLOCK_Y - 1) / BLOCK_Y);
+		assert(mask.size(1) == (image_width + BLOCK_X - 1) / BLOCK_X);
 	}
 
 	const int P = means3D.size(0);
@@ -120,7 +120,7 @@ RasterizeGaussiansCUDA(
 			mask.contiguous().data<int>(),
 			debug);
 		rendered = std::get<0>(returned);
-		batch_rendered = std::get<0>(returned);
+		batch_rendered = std::get<1>(returned);
 	}
 	return std::make_tuple(rendered, batch_rendered, out_color, out_depth, radii, geomBuffer, binningBuffer, imgBuffer, mask);
 }
@@ -150,6 +150,7 @@ RasterizeGaussiansBackwardCUDA(
 	torch::Tensor& mask,
 	const bool debug) 
 {
+	const int B = viewmatrix.size(0);
 	const int P = means3D.size(0);
 	const int H = dL_dout_color.size(1);
 	const int W = dL_dout_color.size(2);
@@ -160,20 +161,22 @@ RasterizeGaussiansBackwardCUDA(
 		M = sh.size(1);
 	}
 
+	torch::Tensor dL_dmeans2D = torch::zeros({BR, 4}, means3D.options());
+	torch::Tensor dL_dcolors = torch::zeros({BR, NUM_CHANNELS}, means3D.options());
+	torch::Tensor dL_ddepths = torch::zeros({BR, 1}, means3D.options());
+	torch::Tensor dL_dconic = torch::zeros({BR, 2, 2}, means3D.options());
+	torch::Tensor dL_dcov3D = torch::zeros({BR, 6}, means3D.options());
+	
 	torch::Tensor dL_dmeans3D = torch::zeros({P, 3}, means3D.options());
-	torch::Tensor dL_dmeans2D = torch::zeros({P, 4}, means3D.options());
-	torch::Tensor dL_dcolors = torch::zeros({P, NUM_CHANNELS}, means3D.options());
-	torch::Tensor dL_ddepths = torch::zeros({P, 1}, means3D.options());
-	torch::Tensor dL_dconic = torch::zeros({P, 2, 2}, means3D.options());
 	torch::Tensor dL_dopacity = torch::zeros({P, 1}, means3D.options());
-	torch::Tensor dL_dcov3D = torch::zeros({P, 6}, means3D.options());
-	torch::Tensor dL_dsh = torch::zeros({P, M, 3}, means3D.options());
 	torch::Tensor dL_dscales = torch::zeros({P, 3}, means3D.options());
 	torch::Tensor dL_drotations = torch::zeros({P, 4}, means3D.options());
-  
-	if(P != 0)
+	torch::Tensor dL_dsh = torch::zeros({P, M, 3}, means3D.options());
+
+	torch::Tensor point_idx = torch::zeros({BR}, means3D.options().dtype(torch::kInt32));
+	if(BR != 0)
 	{  
-		CudaRasterizer::Rasterizer::backward(P, degree, M, R, BR,
+		CudaRasterizer::Rasterizer::backward(P, degree, M, B, R, BR,
 		background.contiguous().data<float>(),
 		W, H, 
 		means3D.contiguous().data<float>(),
@@ -203,10 +206,17 @@ RasterizeGaussiansBackwardCUDA(
 		dL_dscales.contiguous().data<float>(),
 		dL_drotations.contiguous().data<float>(),
 		mask.contiguous().data<int>(),
+		point_idx.contiguous().data<int>(),
 		debug);
 	}
+	
+	point_idx = point_idx.to(torch::kInt64);
 
-  	return std::make_tuple(dL_dmeans2D, dL_dopacity, dL_dmeans3D, dL_dsh, dL_dscales, dL_drotations);
+	torch::Tensor dL_dmeans2D_sum = torch::zeros({P, 4}, means3D.options());
+	dL_dmeans2D_sum.scatter_add_(0, point_idx.unsqueeze(-1).expand({-1, 4}), dL_dmeans2D);
+	dL_dmeans2D = torch::Tensor();
+
+  	return std::make_tuple(dL_dmeans2D_sum, dL_dopacity, dL_dmeans3D, dL_dsh, dL_dscales, dL_drotations);
 }
 
 torch::Tensor markVisible(

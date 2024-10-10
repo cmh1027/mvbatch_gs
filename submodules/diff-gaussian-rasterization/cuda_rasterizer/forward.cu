@@ -250,6 +250,7 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 )
 {
 	auto idx = cg::this_grid().thread_rank();
+
 	if (idx >= BR)
 		return;
 	int point_idx = point_index[idx];
@@ -348,7 +349,6 @@ renderCUDA(
 	float* __restrict__ out_color,
 	float* __restrict__ out_depth,
 	const int* __restrict__ mask,
-	const int* __restrict__ point_index,
 	const int* __restrict__ point_batch_index)
 {
 	// Identify current tile and associated min/max pixel range.
@@ -479,7 +479,6 @@ void FORWARD::render(
 	float* out_color,
 	float* out_depth,
 	const int* mask,
-	const int* point_index,
 	const int* point_batch_index
 )
 {
@@ -497,7 +496,6 @@ void FORWARD::render(
 		out_color,
 		out_depth,
 		mask,
-		point_index,
 		point_batch_index
 	);
 	ERROR_CHECK

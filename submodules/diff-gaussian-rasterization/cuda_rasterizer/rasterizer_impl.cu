@@ -296,7 +296,6 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 	cudaMemset(geomState.point_batch_index, 0, sizeof(int) * BR);
 	savePointIndex << <(P + 255) / 256, 256 >> > (P, B, batch_num_rendered_sums, batch_rendered_check, geomState.point_index, geomState.point_batch_index);
 
-	
 	cudaFree(batch_num_rendered);
 	cudaFree(batch_num_rendered_sums);
 	cudaFree(batch_rendered_check);
@@ -329,7 +328,7 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		mask,
 		geomState.point_index,
 		geomState.point_batch_index
-	), 1)
+	), debug)
 
 
 	// Compute prefix sum over full list of touched tile counts by Gaussians
@@ -396,16 +395,15 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		out_color,
 		out_depth,
 		mask,
-		geomState.point_index,
 		geomState.point_batch_index
-	), 1)
-	return std::make_tuple(num_rendered, BR);
+	), debug)
+	return std::make_tuple(num_rendered, BR);	
 }
 
 // Produce necessary gradients for optimization, corresponding
 // to forward render pass
 void CudaRasterizer::Rasterizer::backward(
-	const int P, int D, int M, int R, int BR,
+	const int P, int D, int M, int B, int R, int BR,
 	const float* background,
 	const int width, int height,
 	const float* means3D,
@@ -434,12 +432,15 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dscale,
 	float* dL_drot,
 	const int* mask,
+	int* point_idx,
 	bool debug)
 {
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, BR);
 	BinningState binningState = BinningState::fromChunk(binning_buffer, R);
 	ImageState imgState = ImageState::fromChunk(img_buffer, width * height);
 
+
+	cudaMemcpy(point_idx, geomState.point_index, sizeof(int)*BR, cudaMemcpyDeviceToDevice);
 	const float focal_y = height / (2.0f * tan_fovy);
 	const float focal_x = width / (2.0f * tan_fovx);
 
@@ -449,19 +450,17 @@ void CudaRasterizer::Rasterizer::backward(
 	// Compute loss gradients w.r.t. 2D mean position, conic matrix,
 	// opacity and RGB of Gaussians from per-pixel loss gradients.
 	// If we were given precomputed colors and not SHs, use them.
-	const float* color_ptr = geomState.rgb;
-	const float* depth_ptr = geomState.depths;
 	CHECK_CUDA(BACKWARD::render(
 		tile_grid,
 		block,
 		imgState.ranges,
 		binningState.point_list,
-		width, height,
+		width, height, BR,
 		background,
 		geomState.means2D,
 		geomState.conic_opacity,
-		color_ptr,
-		depth_ptr,
+		geomState.rgb,
+		geomState.depths,
 		imgState.accum_alpha,
 		imgState.n_contrib,
 		dL_dpix,
@@ -471,13 +470,12 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dopacity,
 		dL_dcolor,
 		dL_ddepth,
-		mask), debug)
+		mask,
+		geomState.point_index,
+		geomState.point_batch_index
+	), debug)
 
-	// Take care of the rest of preprocessing. Was the precomputed covariance
-	// given to us or a scales/rot pair? If precomputed, pass that. If not,
-	// use the one we computed ourselves.
-	const float* cov3D_ptr = geomState.cov3D;
-	CHECK_CUDA(BACKWARD::preprocess(P, D, M,
+	CHECK_CUDA(BACKWARD::preprocess(P, D, M, BR,
 		(float3*)means3D,
 		radii,
 		shs,
@@ -485,7 +483,7 @@ void CudaRasterizer::Rasterizer::backward(
 		(glm::vec3*)scales,
 		(glm::vec4*)rotations,
 		scale_modifier,
-		cov3D_ptr,
+		geomState.cov3D,
 		viewmatrix,
 		projmatrix,
 		focal_x, focal_y,
@@ -499,5 +497,9 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dcov3D,
 		dL_dsh,
 		(glm::vec3*)dL_dscale,
-		(glm::vec4*)dL_drot), debug)
+		(glm::vec4*)dL_drot,
+		mask,
+		geomState.point_index,
+		geomState.point_batch_index
+	), debug)
 }

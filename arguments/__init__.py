@@ -131,7 +131,7 @@ class OptimizationParams(ParamGroup):
 
         self.add_ratio = 0.05
 
-        self.turn_off_print = False
+        self.only_psnr = False
         self.log_batch = False
         self.log_batch_interval = 1
 

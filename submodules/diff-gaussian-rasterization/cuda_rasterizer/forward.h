@@ -82,7 +82,6 @@ namespace FORWARD
 		float* out_color,
 		float* out_depth,
 		const int* mask,
-		const int* point_index,
 		const int* point_batch_index
 	);
 }

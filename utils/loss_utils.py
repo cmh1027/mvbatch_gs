@@ -14,15 +14,19 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 from math import exp
 
-_window = None
+window = None
 
-def l1_loss(network_output, gt, mask=None):
+
+def collage_l1_loss(network_output, gt, mask, N):
+    loss = torch.abs((network_output - gt)).view(3, -1).sum(dim=0)
+    mask = mask.view(3, -1)[0]
+    idx_count = mask.bincount()
+    loss_sum = torch.zeros(len(idx_count), device=torch.device('cuda')).scatter_add_(0, mask, loss)
+    return (loss_sum / idx_count).sum()
+
+def l1_loss(network_output, gt):
     loss = torch.abs((network_output - gt))
-    if mask is not None:
-        loss = loss * mask[None, ...]
-        return loss, loss.sum() / mask.sum()
-    else:
-        return loss, loss.mean()
+    return loss, loss.mean()
 
 def l2_loss(network_output, gt):
     return ((network_output - gt) ** 2).mean()
@@ -39,14 +43,11 @@ def create_window(window_size, channel):
 
 def ssim(img1, img2, window_size=11, mask=None):
     channel = img1.size(-3)
-    global _window
-    if _window is None:
-        _window = create_window(window_size, channel)
-    window = _window
-    if img1.is_cuda:
-        window = window.cuda(img1.get_device())
-    window = window.type_as(img1)
-
+    global window
+    if window is None:
+        window = create_window(window_size, channel)
+        if img1.is_cuda:
+            window = window.cuda()
     return _ssim(img1, img2, window, window_size, channel, mask=mask)
 
 def conv2d(img, window, padding, groups, mask=None):
@@ -79,5 +80,6 @@ def _ssim(img1, img2, window, window_size, channel, mask=None):
     ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
 
     return ssim_map
+
 
 
