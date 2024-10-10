@@ -37,7 +37,7 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
         assert math.tan(viewpoint_cameras[0].FoVx * 0.5) == math.tan(viewpoint_cameras[1].FoVx * 0.5)
 
     if grid_t is None:
-        grid_t = torch.zeros(len(viewpoint_cameras), 2, device=torch.device('cuda'))
+        grid_t = torch.zeros(len(viewpoint_cameras), 2, device=torch.device('cuda'), dtype=torch.int32)
 
     # Set up rasterization configuration
     tanfovx = math.tan(viewpoint_cameras[0].FoVx * 0.5)

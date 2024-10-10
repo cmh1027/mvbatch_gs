@@ -137,9 +137,9 @@ def training(dataset, opt, pipe, args):
 
 		pmask = torch.randint(0, len(cams), (partial_height, partial_width), dtype=torch.int32, device=torch.device('cuda'))
 		if opt.random_grid_movement and len(cams) > 1:
-			grid_t = torch.cat([torch.randint(-opt.mask_height+1, opt.mask_height, (len(cams), 1)), torch.randint(-opt.mask_width+1, opt.mask_width, (len(cams), 1))], dim=-1).cuda() # (N, 2)
+			grid_t = torch.cat([torch.randint(-opt.mask_height+1, opt.mask_height, (len(cams), 1)), torch.randint(-opt.mask_width+1, opt.mask_width, (len(cams), 1))], dim=-1).cuda() # (N, 2
 		else:
-			grid_t = torch.zeros(len(cams), 2, device=torch.device('cuda'))
+			grid_t = torch.zeros(len(cams), 2, device=torch.device('cuda'), dtype=torch.int32)
 
 		render_pkg = render(cams, gaussians, pipe, bg, mask=pmask, grid_t=grid_t)
 		
@@ -151,8 +151,16 @@ def training(dataset, opt, pipe, args):
 			render_pkg["radii"],
 			render_pkg["log_buffer"]
 		)
-		gt_images = torch.stack([cam.translated_gt_image(image, grid_t[idx][0], grid_t[idx][1]) for idx, cam in enumerate(cams)])
+		gt_images = []
+		gt_masks = []
+		for idx, cam in enumerate(cams):
+			gt_image, gt_mask = cam.translated_gt_image(image, grid_t[idx][0], grid_t[idx][1])
+			gt_images += [gt_image]
+			gt_masks += [gt_mask]
+		gt_images = torch.stack(gt_images)
+		gt_masks = torch.stack(gt_masks)
 
+		
 		collage_mask = torch.zeros(H, W, device=torch.device('cuda'), dtype=torch.int64)
 		pmask_expand = torch.kron(pmask, torch.ones(opt.mask_height, opt.mask_width, device=torch.device('cuda')))
 		collage_mask[:, :] = pmask_expand[:H, :W]
@@ -170,7 +178,7 @@ def training(dataset, opt, pipe, args):
 		if lambda_dssim > 0:
 			ssim_loss = 0
 			for i in range(len(cams)):
-				collage_mask_partial = torch.where(collage_mask[0:1] == i, 1., 0.)
+				collage_mask_partial = torch.where(collage_mask[0:1] == i, 1., 0.) * gt_masks[i]
 				ssim_loss += lambda_dssim * (1 - fused_ssim(image, collage_gt, collage_mask_partial)).mean()
 			loss += lambda_dssim * ssim_loss
 			

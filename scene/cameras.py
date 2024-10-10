@@ -62,24 +62,29 @@ class Camera(nn.Module):
         if offset_x == 0 and offset_y == 0:
             return self.full_proj_transform
         projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy, 
-                                                W=self.image_width, H=self.image_height, x_offset_pix=offset_x, y_offset_pix=-offset_y).transpose(0,1).cuda()
+                                                W=self.image_width, H=self.image_height, x_offset_pix=-offset_x, y_offset_pix=-offset_y).transpose(0,1).cuda()
         full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(projection_matrix.unsqueeze(0))).squeeze(0)
         return full_proj_transform
     
     def translated_gt_image(self, rendered, offset_y, offset_x):
         if offset_x == 0 and offset_y == 0:
-            return self.original_image
+            return self.original_image, torch.ones_like(self.original_image[0:1])
         gt_image = rendered.clone()
+        unmasked = torch.zeros_like(self.original_image[0:1])
         _, H, W = gt_image.shape
         if offset_y >= 0 and offset_x >= 0:
             gt_image[:, :H-offset_y, :W-offset_x] = self.original_image[:, offset_y:, offset_x:]
+            unmasked[:, :H-offset_y, :W-offset_x] = 1
         elif offset_y < 0 and offset_x >= 0:
             gt_image[:, -offset_y:, :W-offset_x] = self.original_image[:, :offset_y, offset_x:]
+            unmasked[:, -offset_y:, :W-offset_x] = 1
         elif offset_y >= 0 and offset_x < 0:
             gt_image[:, :H-offset_y, -offset_x:] = self.original_image[:, offset_y:, :offset_x]
+            unmasked[:, :H-offset_y, -offset_x:] = 1
         else:
             gt_image[:, -offset_y:, -offset_x:] = self.original_image[:, :offset_y, :offset_x]
-        return gt_image
+            unmasked[:, -offset_y:, -offset_x:] = 1
+        return gt_image, unmasked
 
         
 
