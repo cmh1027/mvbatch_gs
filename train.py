@@ -99,7 +99,6 @@ def training(dataset, opt, pipe, args):
 	print(f"tile size {opt.mask_height} x {opt.mask_width}")
 
 	start_time = time.time()
-	batch_teleport = False
 	for iteration in range(first_iter, opt.iterations + 1): 
 		gt_images = []
 		if iteration == forced_exit:
@@ -111,19 +110,9 @@ def training(dataset, opt, pipe, args):
 		if iteration % 1000 == 0:
 			gaussians.oneupSHdegree()
 
-		if batch_teleport and iteration <= opt.batch_iteration_teleport:
-			if iteration % 10 == 0: progress_bar.update(10)
-			continue
-
 		if opt.batch_until > 0 and iteration == (opt.batch_until+1) and opt.batch_size > 1:
 			print("BATCH IS TURNED OFF")
 			opt.batch_size = 1
-
-		if opt.batch_iteration_teleport != -1 and args.cap_max == len(gaussians.get_xyz) and not batch_teleport:
-			print(f"TELEPORT TO ITERATION {opt.batch_iteration_teleport}")
-			batch_teleport = True
-			opt.batch_size = 1
-			continue
 
 		# Pick a random Camera
 		viewpoints = scene.getTrainCameras().copy()
@@ -147,18 +136,23 @@ def training(dataset, opt, pipe, args):
 		bg = torch.rand((3), device="cuda") if opt.random_background else background
 
 		pmask = torch.randint(0, len(cams), (partial_height, partial_width), dtype=torch.int32, device=torch.device('cuda'))
+		if opt.random_grid_movement and len(cams) > 1:
+			grid_t = torch.cat([torch.randint(-opt.mask_height+1, opt.mask_height, (len(cams), 1)), torch.randint(-opt.mask_width+1, opt.mask_width, (len(cams), 1))], dim=-1).cuda() # (N, 2)
+		else:
+			grid_t = torch.zeros(len(cams), 2, device=torch.device('cuda'))
 
-		render_pkg = render(cams, gaussians, pipe, bg, mask=pmask)
+		render_pkg = render(cams, gaussians, pipe, bg, mask=pmask, grid_t=grid_t)
 		
-		(image, depth, viewspace_point_tensor, visibility_filter, radii) = (
+		(image, depth, viewspace_point_tensor, visibility_filter, radii, log_buffer) = (
 			render_pkg["render"][:3, ...], 
 			render_pkg["depth"],
 			render_pkg["viewspace_points"], 
 			render_pkg["visibility_filter"], 
-			render_pkg["radii"]
+			render_pkg["radii"],
+			render_pkg["log_buffer"]
 		)
+		gt_images = torch.stack([cam.translated_gt_image(image, grid_t[idx][0], grid_t[idx][1]) for idx, cam in enumerate(cams)])
 
-		gt_images = torch.stack([cam.original_image.cuda() for cam in cams])
 		collage_mask = torch.zeros(H, W, device=torch.device('cuda'), dtype=torch.int64)
 		pmask_expand = torch.kron(pmask, torch.ones(opt.mask_height, opt.mask_width, device=torch.device('cuda')))
 		collage_mask[:, :] = pmask_expand[:H, :W]
@@ -188,9 +182,11 @@ def training(dataset, opt, pipe, args):
 			vis_ratios.append(((gaussians._opacity.grad != 0).sum() / len(gaussians._opacity)).item())
 			if iteration % 100 == 0:
 				visible_ratio = sum(vis_ratios) / len(vis_ratios)
-				tb_writer.add_scalar(f'train/vis_ratio', visible_ratio, iteration)
 				vis_ratios = []
+				tb_writer.add_scalar(f'train/vis_ratio', visible_ratio, iteration)
 				tb_writer.add_scalar(f'train/num_points', len(gaussians._xyz), iteration)
+				tb_writer.add_scalar(f'train/R', log_buffer["R"], iteration)
+				tb_writer.add_scalar(f'train/BR', log_buffer["BR"], iteration)
 
 		if opt.gs_type == "mcmc":
 			reg_loss = 0

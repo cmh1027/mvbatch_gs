@@ -15,7 +15,7 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 
-def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, mask=None):
+def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, mask=None, grid_t=None):
     """
     Render the scene. 
     
@@ -36,6 +36,8 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
         assert viewpoint_cameras[0].image_height == viewpoint_cameras[1].image_height
         assert math.tan(viewpoint_cameras[0].FoVx * 0.5) == math.tan(viewpoint_cameras[1].FoVx * 0.5)
 
+    if grid_t is None:
+        grid_t = torch.zeros(len(viewpoint_cameras), 2, device=torch.device('cuda'))
 
     # Set up rasterization configuration
     tanfovx = math.tan(viewpoint_cameras[0].FoVx * 0.5)
@@ -43,13 +45,13 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
     image_height = int(viewpoint_cameras[0].image_height)
     image_width = int(viewpoint_cameras[0].image_width)
     viewmatrix = torch.stack([cam.world_view_transform for cam in viewpoint_cameras])
-    projmatrix = torch.stack([cam.full_proj_transform for cam in viewpoint_cameras])
+    projmatrix = torch.stack([cam.translate_proj(grid_t[idx][0], grid_t[idx][1]) for idx, cam in enumerate(viewpoint_cameras)])
     campos = torch.stack([cam.camera_center for cam in viewpoint_cameras])
 
 
     if mask is None:
         mask = torch.tensor(0)
-
+    log_buffer = {}
     raster_settings = GaussianRasterizationSettings(
         image_height=image_height,
         image_width=image_width,
@@ -62,7 +64,8 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
         sh_degree=pc.active_sh_degree,
         campos=campos,
         mask=mask,
-        debug=pipe.debug
+        debug=pipe.debug,
+        log_buffer=log_buffer
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
@@ -89,7 +92,8 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
                     "visibility_filter" : radii > 0,
                     "radii": radii,
                     "depth": depth,
-                    "shs_grad": shs_grad}
+                    "shs_grad": shs_grad,
+                    "log_buffer": log_buffer}
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
     return return_dict

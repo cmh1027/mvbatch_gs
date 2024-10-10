@@ -13,7 +13,7 @@ import torch
 from torch import nn
 import numpy as np
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix
-
+from torchvision.utils import save_image
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid,
@@ -52,10 +52,38 @@ class Camera(nn.Module):
         self.scale = scale
 
         self.world_view_transform = torch.tensor(getWorld2View2(R, T, trans, scale)).transpose(0, 1).cuda()
-        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
-        self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
+        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy, 
+                                                     W=self.image_width, H=self.image_height).transpose(0,1).cuda()
+        self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
+    
+    def translate_proj(self, offset_y, offset_x):
+        if offset_x == 0 and offset_y == 0:
+            return self.full_proj_transform
+        projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy, 
+                                                W=self.image_width, H=self.image_height, x_offset_pix=offset_x, y_offset_pix=-offset_y).transpose(0,1).cuda()
+        full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(projection_matrix.unsqueeze(0))).squeeze(0)
+        return full_proj_transform
+    
+    def translated_gt_image(self, rendered, offset_y, offset_x):
+        if offset_x == 0 and offset_y == 0:
+            return self.original_image
+        gt_image = rendered.clone()
+        _, H, W = gt_image.shape
+        if offset_y >= 0 and offset_x >= 0:
+            gt_image[:, :H-offset_y, :W-offset_x] = self.original_image[:, offset_y:, offset_x:]
+        elif offset_y < 0 and offset_x >= 0:
+            gt_image[:, -offset_y:, :W-offset_x] = self.original_image[:, :offset_y, offset_x:]
+        elif offset_y >= 0 and offset_x < 0:
+            gt_image[:, :H-offset_y, -offset_x:] = self.original_image[:, offset_y:, :offset_x]
+        else:
+            gt_image[:, -offset_y:, -offset_x:] = self.original_image[:, :offset_y, :offset_x]
+        return gt_image
+
+        
+
+    
 class MiniCam:
     def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform):
         self.image_width = width

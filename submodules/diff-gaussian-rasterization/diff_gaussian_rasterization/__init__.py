@@ -85,7 +85,8 @@ class _RasterizeGaussians(torch.autograd.Function):
                 raise ex
         else:
             num_rendered, batch_num_rendered, color, depth, radii, geomBuffer, binningBuffer, imgBuffer, mask = _C.rasterize_gaussians(*args)
-
+        raster_settings.log_buffer["R"] = num_rendered
+        raster_settings.log_buffer["BR"] = batch_num_rendered
         # Keep relevant tensors for backward
         ctx.raster_settings = raster_settings
         ctx.num_rendered = num_rendered
@@ -163,7 +164,7 @@ class GaussianRasterizationSettings(NamedTuple):
     campos : torch.Tensor
     debug : bool
     mask : torch.Tensor
-    mask : torch.Tensor
+    log_buffer: dict
 
 class GaussianRasterizer(nn.Module):
     def __init__(self, raster_settings):

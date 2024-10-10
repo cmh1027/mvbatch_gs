@@ -206,7 +206,6 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
 	uint2 rect_min, rect_max;
 	getRect(point_image, my_radius, rect_min, rect_max, grid);
-	// auto tiles = (rect_max.x - rect_min.x) * (rect_max.y - rect_min.y);
 	uint tiles = 0;
 	for (int y = rect_min.y; y < rect_max.y; y++)
 	{
@@ -304,7 +303,6 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
 	uint2 rect_min, rect_max;
 	getRect(point_image, my_radius, rect_min, rect_max, grid);
-	// auto tiles = (rect_max.x - rect_min.x) * (rect_max.y - rect_min.y);
 	uint tiles = 0;
 	for (int y = rect_min.y; y < rect_max.y; y++)
 	{

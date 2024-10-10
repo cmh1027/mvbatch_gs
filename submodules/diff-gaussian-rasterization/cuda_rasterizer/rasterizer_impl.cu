@@ -262,6 +262,7 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 	cudaMalloc(&batch_rendered_check, sizeof(bool) * B * P);
 	cudaMemset(batch_num_rendered, 0, sizeof(int) * P);
 	cudaMemset(batch_rendered_check, 0, sizeof(bool) * B * P);
+	cudaDeviceSynchronize();
 	CHECK_CUDA(FORWARD::measureBufferSize(
 		P, D, M, B,
 		means3D,
@@ -277,7 +278,8 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		mask,
 		batch_num_rendered,
 		batch_rendered_check
-	), 1)
+	), debug)
+	cudaDeviceSynchronize();
 
     void *d_temp_storage = nullptr;
     size_t temp_storage_bytes = 0;
@@ -285,6 +287,7 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
     cub::DeviceScan::InclusiveSum(nullptr, temp_storage_bytes, batch_num_rendered, batch_num_rendered_sums, P);
     cudaMalloc(&d_temp_storage, temp_storage_bytes);
     cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, batch_num_rendered, batch_num_rendered_sums, P);
+	cudaDeviceSynchronize();
 	cudaFree(d_temp_storage);
 	cudaMemcpy(&BR, batch_num_rendered_sums + P - 1, sizeof(int), cudaMemcpyDeviceToHost);
 
@@ -294,7 +297,9 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 
 	cudaMemset(geomState.point_index, 0, sizeof(int) * BR);
 	cudaMemset(geomState.point_batch_index, 0, sizeof(int) * BR);
+	
 	savePointIndex << <(P + 255) / 256, 256 >> > (P, B, batch_num_rendered_sums, batch_rendered_check, geomState.point_index, geomState.point_batch_index);
+	cudaDeviceSynchronize();
 
 	cudaFree(batch_num_rendered);
 	cudaFree(batch_num_rendered_sums);

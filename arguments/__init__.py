@@ -119,10 +119,7 @@ class OptimizationParams(ParamGroup):
         self.batch_partition_denom = -1
         self.mask_height = 8
         self.mask_width = 8
-        self.use_preprocess_mask = False
-        self.preprocess_mask_start = 0
-        self.batch_iteration_teleport = -1
-
+        self.random_grid_movement = False
 
         self.single_partial_rays = False
         self.single_partial_rays_denom = 1
