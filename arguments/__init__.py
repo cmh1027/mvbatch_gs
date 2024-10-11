@@ -64,8 +64,6 @@ class ModelParams(ParamGroup):
         self.r_coef = 1.0
         self.num_imgs = -1
         self.init_scale = 0.1
-        self.mask_height = 8
-        self.mask_width = 8
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -119,7 +117,9 @@ class OptimizationParams(ParamGroup):
         self.batch_until = -1
         self.batch_partition = False
         self.batch_partition_denom = -1
-        self.random_grid_movement = False
+        self.batch_size_decrease = False
+        self.mask_height = 8
+        self.mask_width = 8
 
         self.single_partial_rays = False
         self.single_partial_rays_denom = 1

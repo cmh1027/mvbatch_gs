@@ -26,6 +26,17 @@ namespace CudaRasterizer
 		chunk = reinterpret_cast<char*>(ptr + count);
 	}
 
+
+	struct CacheState
+	{
+		int* batch_num_rendered;
+		int* batch_num_rendered_sums;
+		bool* batch_rendered_check;
+		size_t scan_size;
+		char* scanning_space;
+		static CacheState fromChunk(char*& chunk, size_t P, size_t B);
+	};
+
 	struct GeometryState
 	{
 		size_t scan_size;
@@ -71,6 +82,14 @@ namespace CudaRasterizer
 	{
 		char* size = nullptr;
 		T::fromChunk(size, P);
+		return ((size_t)size) + 128;
+	}
+
+	template<typename T> 
+	size_t required(size_t P1, size_t P2)
+	{
+		char* size = nullptr;
+		T::fromChunk(size, P1, P2);
 		return ((size_t)size) + 128;
 	}
 

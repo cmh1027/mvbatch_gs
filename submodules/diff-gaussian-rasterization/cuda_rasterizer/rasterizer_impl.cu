@@ -181,6 +181,18 @@ void CudaRasterizer::Rasterizer::markVisible(
 		present);
 }
 
+CudaRasterizer::CacheState CudaRasterizer::CacheState::fromChunk(char*& chunk, size_t P, size_t B)
+{
+	CacheState cache;
+	obtain(chunk, cache.batch_num_rendered, P, 128);
+	obtain(chunk, cache.batch_num_rendered_sums, P, 128);
+	obtain(chunk, cache.batch_rendered_check, P*B, 128);
+    cub::DeviceScan::InclusiveSum(nullptr, cache.scan_size, cache.batch_num_rendered, cache.batch_num_rendered_sums, P);
+    obtain(chunk, cache.scanning_space, cache.scan_size, 128);
+
+	return cache;
+}
+
 CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& chunk, size_t BR)
 {
 	GeometryState geom;
@@ -229,6 +241,7 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 	std::function<char* (size_t)> geometryBuffer,
 	std::function<char* (size_t)> binningBuffer,
 	std::function<char* (size_t)> imageBuffer,
+	std::function<char* (size_t)> cacheBuffer,
 	const int P, int D, int M, int B,
 	const float* background,
 	const int width, int height,
@@ -253,16 +266,11 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 	dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
 	dim3 block(BLOCK_X, BLOCK_Y, 1);
 
-	int* batch_num_rendered;
-    int* batch_num_rendered_sums;
-	bool* batch_rendered_check;
+	size_t cache_chunk_size = required<CacheState>(P, B);
+	char* cache_chunkptr = cacheBuffer(cache_chunk_size);
+	CacheState cacheState = CacheState::fromChunk(cache_chunkptr, P, B);
 	int BR;
-	cudaMalloc(&batch_num_rendered, sizeof(int) * P);
-	cudaMalloc(&batch_num_rendered_sums, sizeof(int) * P);
-	cudaMalloc(&batch_rendered_check, sizeof(bool) * B * P);
-	cudaMemset(batch_num_rendered, 0, sizeof(int) * P);
-	cudaMemset(batch_rendered_check, 0, sizeof(bool) * B * P);
-	cudaDeviceSynchronize();
+
 	CHECK_CUDA(FORWARD::measureBufferSize(
 		P, D, M, B,
 		means3D,
@@ -276,34 +284,18 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		tan_fovx, tan_fovy,
 		tile_grid,
 		mask,
-		batch_num_rendered,
-		batch_rendered_check
+		cacheState.batch_num_rendered,
+		cacheState.batch_rendered_check
 	), debug)
-	cudaDeviceSynchronize();
 
-    void *d_temp_storage = nullptr;
-    size_t temp_storage_bytes = 0;
-
-    cub::DeviceScan::InclusiveSum(nullptr, temp_storage_bytes, batch_num_rendered, batch_num_rendered_sums, P);
-    cudaMalloc(&d_temp_storage, temp_storage_bytes);
-    cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, batch_num_rendered, batch_num_rendered_sums, P);
-	cudaDeviceSynchronize();
-	cudaFree(d_temp_storage);
-	cudaMemcpy(&BR, batch_num_rendered_sums + P - 1, sizeof(int), cudaMemcpyDeviceToHost);
+    cub::DeviceScan::InclusiveSum(cacheState.scanning_space, cacheState.scan_size, cacheState.batch_num_rendered, cacheState.batch_num_rendered_sums, P);
+	cudaMemcpy(&BR, cacheState.batch_num_rendered_sums + P - 1, sizeof(int), cudaMemcpyDeviceToHost);
 
 	size_t chunk_size = required<GeometryState>(BR);
 	char* chunkptr = geometryBuffer(chunk_size);
 	GeometryState geomState = GeometryState::fromChunk(chunkptr, BR);
-
-	cudaMemset(geomState.point_index, 0, sizeof(int) * BR);
-	cudaMemset(geomState.point_batch_index, 0, sizeof(int) * BR);
 	
-	savePointIndex << <(P + 255) / 256, 256 >> > (P, B, batch_num_rendered_sums, batch_rendered_check, geomState.point_index, geomState.point_batch_index);
-	cudaDeviceSynchronize();
-
-	cudaFree(batch_num_rendered);
-	cudaFree(batch_num_rendered_sums);
-	cudaFree(batch_rendered_check);
+	savePointIndex << <(P + 255) / 256, 256 >> > (P, B, cacheState.batch_num_rendered_sums, cacheState.batch_rendered_check, geomState.point_index, geomState.point_batch_index);
 
 	size_t img_chunk_size = required<ImageState>(width * height);
 	char* img_chunkptr = imageBuffer(img_chunk_size);

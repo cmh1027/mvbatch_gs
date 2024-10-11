@@ -91,12 +91,12 @@ def training(dataset, opt, pipe, args):
 		else:
 			n_rays = (H * W) 
 
-	partial_n_rays = n_rays // (dataset.mask_width * dataset.mask_height)
-	partial_height = (H + dataset.mask_height - 1) // dataset.mask_height
-	partial_width = (W + dataset.mask_width - 1) // dataset.mask_width
+	partial_n_rays = n_rays // (opt.mask_width * opt.mask_height)
+	partial_height = (H + opt.mask_height - 1) // opt.mask_height
+	partial_width = (W + opt.mask_width - 1) // opt.mask_width
 			
 	print(f"Image ({H} x {W} = {H * W}), n_rays : {n_rays}")
-	print(f"tile size {dataset.mask_height} x {dataset.mask_width}")
+	print(f"tile size {opt.mask_height} x {opt.mask_width}")
 
 	start_time = time.time()
 	for iteration in range(first_iter, opt.iterations + 1): 
@@ -110,9 +110,14 @@ def training(dataset, opt, pipe, args):
 		if iteration % 1000 == 0:
 			gaussians.oneupSHdegree()
 
+
 		if opt.batch_until > 0 and iteration == (opt.batch_until+1) and opt.batch_size > 1:
 			print("BATCH IS TURNED OFF")
 			opt.batch_size = 1
+		
+		if opt.batch_size_decrease and iteration in args.batch_size_decrease_interval and opt.batch_size > 1:
+			print(f"BATCH SIZE {opt.batch_size} => {opt.batch_size // 2}")
+			opt.batch_size = opt.batch_size // 2
 
 		# Pick a random Camera
 		viewpoints = scene.getTrainCameras().copy()
@@ -136,12 +141,8 @@ def training(dataset, opt, pipe, args):
 		bg = torch.rand((3), device="cuda") if opt.random_background else background
 
 		pmask = torch.randint(0, len(cams), (partial_height, partial_width), dtype=torch.int32, device=torch.device('cuda'))
-		if opt.random_grid_movement and len(cams) > 1:
-			grid_t = torch.cat([torch.randint(-dataset.mask_height+1, dataset.mask_height, (len(cams), 1)), torch.randint(-dataset.mask_width+1, dataset.mask_width, (len(cams), 1))], dim=-1).cuda() # (N, 2
-		else:
-			grid_t = torch.zeros(len(cams), 2, device=torch.device('cuda'), dtype=torch.int32)
 
-		render_pkg = render(cams, gaussians, pipe, bg, mask=pmask, grid_t=grid_t)
+		render_pkg = render(cams, gaussians, pipe, bg, mask=pmask)
 		
 		(image, depth, viewspace_point_tensor, visibility_filter, radii, log_buffer) = (
 			render_pkg["render"][:3, ...], 
@@ -151,18 +152,10 @@ def training(dataset, opt, pipe, args):
 			render_pkg["radii"],
 			render_pkg["log_buffer"]
 		)
-		gt_images = []
-		gt_masks = []
-		for idx, cam in enumerate(cams):
-			gt_image, gt_mask = cam.translated_gt_image(image, grid_t[idx][0], grid_t[idx][1])
-			gt_images += [gt_image]
-			gt_masks += [gt_mask]
-		gt_images = torch.stack(gt_images)
-		gt_masks = torch.stack(gt_masks)
-
 		
+		gt_images = torch.stack([cam.original_image.cuda() for cam in cams])
 		collage_mask = torch.zeros(H, W, device=torch.device('cuda'), dtype=torch.int64)
-		pmask_expand = torch.kron(pmask, torch.ones(dataset.mask_height, dataset.mask_width, device=torch.device('cuda')))
+		pmask_expand = torch.kron(pmask, torch.ones(opt.mask_height, opt.mask_width, device=torch.device('cuda')))
 		collage_mask[:, :] = pmask_expand[:H, :W]
 		collage_mask = collage_mask.unsqueeze(0).repeat(3,1,1)
 		collage_gt = torch.gather(gt_images, 0, collage_mask.unsqueeze(0)).squeeze(0)
@@ -178,7 +171,7 @@ def training(dataset, opt, pipe, args):
 		if lambda_dssim > 0:
 			ssim_loss = 0
 			for i in range(len(cams)):
-				collage_mask_partial = torch.where(collage_mask[0:1] == i, 1., 0.) * gt_masks[i]
+				collage_mask_partial = torch.where(collage_mask[0:1] == i, 1., 0.)
 				ssim_loss += lambda_dssim * (1 - fused_ssim(image, collage_gt, collage_mask_partial)).mean()
 			loss += lambda_dssim * ssim_loss
 			
@@ -421,6 +414,7 @@ if __name__ == "__main__":
 	parser.add_argument("--forced_exit", type=int)
 	parser.add_argument("--render_iter", type=int)
 	parser.add_argument("--override_cap_max", type=int)
+	parser.add_argument("--batch_size_decrease_interval", nargs="+", type=int)
 	args = parser.parse_args(sys.argv[1:])
 	if args.config is not None:
 		# Load the configuration file

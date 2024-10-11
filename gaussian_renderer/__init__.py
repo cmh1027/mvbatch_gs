@@ -15,7 +15,7 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 
-def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, mask=None, grid_t=None):
+def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, mask=None):
     """
     Render the scene. 
     
@@ -36,8 +36,6 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
         assert viewpoint_cameras[0].image_height == viewpoint_cameras[1].image_height
         assert math.tan(viewpoint_cameras[0].FoVx * 0.5) == math.tan(viewpoint_cameras[1].FoVx * 0.5)
 
-    if grid_t is None:
-        grid_t = torch.zeros(len(viewpoint_cameras), 2, device=torch.device('cuda'), dtype=torch.int32)
 
     # Set up rasterization configuration
     tanfovx = math.tan(viewpoint_cameras[0].FoVx * 0.5)
@@ -45,7 +43,7 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
     image_height = int(viewpoint_cameras[0].image_height)
     image_width = int(viewpoint_cameras[0].image_width)
     viewmatrix = torch.stack([cam.world_view_transform for cam in viewpoint_cameras])
-    projmatrix = torch.stack([cam.translate_proj(grid_t[idx][0], grid_t[idx][1]) for idx, cam in enumerate(viewpoint_cameras)])
+    projmatrix = torch.stack([cam.full_proj_transform for cam in viewpoint_cameras])
     campos = torch.stack([cam.camera_center for cam in viewpoint_cameras])
 
 
