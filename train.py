@@ -167,6 +167,7 @@ def training(dataset, opt, pipe, args):
 			render_pkg["radii"],
 			render_pkg["log_buffer"]
 		)
+		beta = render_pkg["beta"] + opt.beta_min if opt.use_beta else None
 
 		visibility_count = visibility_count + visibility_filter.to(visibility_count.dtype)
 		batch_vs += [viewspace_point_tensor]
@@ -180,7 +181,7 @@ def training(dataset, opt, pipe, args):
 			collage_mask = collage_mask.unsqueeze(0).repeat(3,1,1)
 			collage_gt = torch.gather(gt_images, 0, collage_mask.unsqueeze(0)).squeeze(0)
 
-			Ll1 = collage_l1_loss(image, collage_gt, collage_mask, len(cams))
+			Ll1 = collage_l1_loss(image, collage_gt, collage_mask, beta=beta)
 
 			loss = (1.0 - lambda_dssim) * Ll1
 			if lambda_dssim > 0:
@@ -191,7 +192,7 @@ def training(dataset, opt, pipe, args):
 
 		else:
 			gt_image = cams[0].original_image
-			_, Ll1 = l1_loss(image, gt_image)
+			_, Ll1 = l1_loss(image, gt_image, beta=beta)
 			loss = (1.0 - lambda_dssim) * Ll1
 			if lambda_dssim > 0:
 				loss += lambda_dssim * (1 - ssim(image, gt_image)).mean()
@@ -271,9 +272,9 @@ def training(dataset, opt, pipe, args):
 					image = render_pkg["render"][:3, ...].cpu()
 					depth = render_pkg["depth"].cpu()
 					gt_image = viewpoints[cam_idx].original_image.cpu()
-					gt_depth = torch.zeros_like(depth)
+					beta_map = render_pkg["beta"].cpu() if opt.use_beta else torch.zeros_like(depth)
 					pred = torch.cat([image, apply_depth_colormap(depth.permute(1, 2, 0))], dim=-1)
-					gt = torch.cat([gt_image, apply_depth_colormap(gt_depth.permute(1, 2, 0))], dim=-1)
+					gt = torch.cat([gt_image, apply_depth_colormap(beta_map.permute(1, 2, 0))], dim=-1)
 					figs = [pred, gt]
 					save_image(torch.cat(figs, dim=1), os.path.join(dataset.model_path, f"vis/iter_{iteration}.png"))
 

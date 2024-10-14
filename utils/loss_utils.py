@@ -17,15 +17,22 @@ import math
 window = None
 
 
-def collage_l1_loss(pred, gt, mask, N):
-    loss = torch.abs((pred - gt)).view(3, -1).sum(dim=0)
+def collage_l1_loss(pred, gt, mask, beta=None):
+    loss = torch.abs((pred - gt)).view(3, -1).mean(dim=0) # (H, W)
+    if beta is not None:
+        beta = beta.view(1, -1)
+        loss = loss + 0.5 * loss.detach() / (beta[0] ** 2) + (3 + torch.log(beta[0]))
     mask = mask.view(3, -1)[0]
     idx_count = mask.bincount().clamp_(min=1)
     loss_sum = torch.zeros(len(idx_count), device=torch.device('cuda')).scatter_add_(0, mask, loss)
     return (loss_sum / idx_count).sum()
 
-def l1_loss(pred, gt):
-    loss = torch.abs((pred - gt))
+def l1_loss(pred, gt, beta=None):
+    loss = torch.abs((pred - gt)).view(3, -1)
+    if beta is not None:
+        beta = beta.view(1, -1)
+        loss = loss.mean(dim=0)
+        loss = loss + 0.5 * loss.detach() / (beta[0] ** 2) + (3 + torch.log(beta[0]))
     return loss, loss.mean()
 
 def l2_loss(pred, gt):

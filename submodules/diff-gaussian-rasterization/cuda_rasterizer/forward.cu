@@ -226,6 +226,7 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	const glm::vec3* scales,
 	const float scale_modifier,
 	const glm::vec4* rotations,
+	const float* betas_g,
 	const float* opacities,
 	const float* shs,
 	bool* clamped,
@@ -240,6 +241,7 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	float* depths,
 	float* cov3Ds,
 	float* rgb,
+	float* betas,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
@@ -320,6 +322,7 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	rgb[idx * C + 0] = result.x;
 	rgb[idx * C + 1] = result.y;
 	rgb[idx * C + 2] = result.z;
+	betas[idx] = betas_g[point_idx];
 
 	// Store some useful helper data for the next steps.
 	depths[idx] = p_view.z;
@@ -342,12 +345,14 @@ renderCUDA(
 	int W, int H,
 	const float2* __restrict__ points_xy_image,
 	const float* __restrict__ features,
+	const float* __restrict__ betas,
 	const float* __restrict__ depths,
 	const float4* __restrict__ conic_opacity,
 	float* __restrict__ final_T,
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
+	float* __restrict__ out_beta,
 	float* __restrict__ out_depth,
 	const int* __restrict__ mask,
 	const int* __restrict__ point_batch_index)
@@ -387,6 +392,7 @@ renderCUDA(
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
+	float Beta = 0;
 	float C[CHANNELS] = { 0 };
 	float D = { 0 };
 
@@ -443,6 +449,7 @@ renderCUDA(
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++)
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
+			Beta += betas[collected_id[j]] * alpha * T;
 			D += depths[collected_id[j]] * alpha * T;
 
 			T = test_T;
@@ -461,6 +468,7 @@ renderCUDA(
 		n_contrib[pix_id] = last_contributor;
 		for (int ch = 0; ch < CHANNELS; ch++)
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
+		out_beta[pix_id] = Beta;
 		out_depth[pix_id] = D;
 	}
 }
@@ -472,12 +480,14 @@ void FORWARD::render(
 	int W, int H,
 	const float2* means2D,
 	const float* colors,
+	const float* betas,
 	const float* depths,
 	const float4* conic_opacity,
 	float* final_T,
 	uint32_t* n_contrib,
 	const float* bg_color,
 	float* out_color,
+	float* out_beta,
 	float* out_depth,
 	const int* mask,
 	const int* point_batch_index
@@ -489,12 +499,14 @@ void FORWARD::render(
 		W, H,
 		means2D,
 		colors,
+		betas,
 		depths,
 		conic_opacity,
 		final_T,
 		n_contrib,
 		bg_color,
 		out_color,
+		out_beta,
 		out_depth,
 		mask,
 		point_batch_index
@@ -507,6 +519,7 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 	const glm::vec3* scales,
 	const float scale_modifier,
 	const glm::vec4* rotations,
+	const float* betas_g,
 	const float* opacities,
 	const float* shs,
 	bool* clamped,
@@ -521,6 +534,7 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 	float* depths,
 	float* cov3Ds,
 	float* rgb,
+	float* betas,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
@@ -536,6 +550,7 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 		scales,
 		scale_modifier,
 		rotations,
+		betas_g,
 		opacities,
 		shs,
 		clamped,
@@ -550,6 +565,7 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 		depths,
 		cov3Ds,
 		rgb,
+		betas,
 		conic_opacity,
 		grid,
 		tiles_touched,

@@ -40,6 +40,7 @@
 		} \
 	}
 
+#define DEBUG
 #ifdef DEBUG
     #define TIMEPRINT(fmt, ...) printf(fmt, ##__VA_ARGS__);
     #define PRINTLINE printf("End %s %d\n", __FILE__, __LINE__);

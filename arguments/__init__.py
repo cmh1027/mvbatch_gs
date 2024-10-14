@@ -89,8 +89,8 @@ class OptimizationParams(ParamGroup):
         self.opacity_lr = 0.05
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
+        self.beta_lr = 0.05
         self.percent_dense = 0.01
-        self.uncertainty_lr = 0.005
 
         self.lambda_dssim = -1
         self.lambda_dssim_init = 0.2
@@ -141,6 +141,8 @@ class OptimizationParams(ParamGroup):
 
         self.evaluate_time = False
         self.gs_type = "mcmc" # ["original", "3dgs"]
+        self.use_beta = False
+        self.beta_min = 0.1
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

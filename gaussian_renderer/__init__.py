@@ -24,10 +24,8 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
  
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
     screenspace_points = torch.zeros((pc.get_xyz.shape[0], 4), dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
-    shs_grad = torch.zeros((pc.get_xyz.shape[0], 3), dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
     try:
         screenspace_points.retain_grad()
-        shs_grad.retain_grad()
     except:
         pass
     if type(viewpoint_cameras) is not list:
@@ -74,23 +72,24 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
     scales = pc.get_scaling
     rotations = pc.get_rotation
     shs = pc.get_features
+    betas = pc.get_beta
 
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
-    rendered_image, radii, depth = rasterizer(
+    rendered_image, rendered_beta, radii, depth = rasterizer(
         means3D = means3D,
         means2D = means2D,
         shs = shs,
         opacities = opacity,
         scales = scales,
         rotations = rotations,
-        shs_grad = shs_grad)
-    return_dict = {"render": rendered_image,
+        betas = betas)
+    return_dict =  {"render": rendered_image,
+                    "beta": rendered_beta,
                     "viewspace_points": screenspace_points,
                     "visibility_filter" : radii > 0,
                     "radii": radii,
                     "depth": depth,
-                    "shs_grad": shs_grad,
                     "log_buffer": log_buffer}
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
