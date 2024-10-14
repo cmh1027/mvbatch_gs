@@ -76,7 +76,6 @@ def training(dataset, opt, pipe, args):
 	bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
 	background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
-
 	viewpoint_stack = None
 	ema_loss_for_log = 0.0
 	progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
