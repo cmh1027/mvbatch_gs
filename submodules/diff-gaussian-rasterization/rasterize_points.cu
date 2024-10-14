@@ -34,7 +34,7 @@ std::function<char*(size_t N)> resizeFunctional(torch::Tensor& t) {
     return lambda;
 }
 
-std::tuple<int, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<int, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
@@ -58,7 +58,7 @@ RasterizeGaussiansCUDA(
 		AT_ERROR("means3D must have dimensions (num_points, 3)");
 	}
 
-	if(mask.ndimension() == 0){
+	if(mask.contiguous().data<int>() == nullptr){
 		mask = torch::full({(image_height + BLOCK_Y) / BLOCK_Y, (image_width + BLOCK_X) / BLOCK_X}, 0, means3D.options().dtype(torch::kInt32));
 	}
 	else{
@@ -79,16 +79,16 @@ RasterizeGaussiansCUDA(
 	
 	torch::Device device(torch::kCUDA);
 	torch::TensorOptions options(torch::kByte);
+	torch::Tensor cacheBuffer = torch::empty({0}, options.device(device));
 	torch::Tensor geomBuffer = torch::empty({0}, options.device(device));
 	torch::Tensor binningBuffer = torch::empty({0}, options.device(device));
 	torch::Tensor imgBuffer = torch::empty({0}, options.device(device));
+
+	std::function<char*(size_t)> cacheFunc = resizeFunctional(cacheBuffer);
 	std::function<char*(size_t)> geomFunc = resizeFunctional(geomBuffer);
 	std::function<char*(size_t)> binningFunc = resizeFunctional(binningBuffer);
 	std::function<char*(size_t)> imgFunc = resizeFunctional(imgBuffer);
 
-	torch::Tensor cacheBuffer = torch::empty({0}, options.device(device));
-	std::function<char*(size_t)> cacheFunc = resizeFunctional(cacheBuffer);
-	
 	int rendered = 0;
 	int batch_rendered = 0;
 	if(P != 0)
@@ -126,7 +126,7 @@ RasterizeGaussiansCUDA(
 		rendered = std::get<0>(returned);
 		batch_rendered = std::get<1>(returned);
 	}
-	return std::make_tuple(rendered, batch_rendered, out_color, out_depth, radii, geomBuffer, binningBuffer, imgBuffer, mask);
+	return std::make_tuple(rendered, batch_rendered, out_color, out_depth, radii, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask);
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -146,12 +146,14 @@ RasterizeGaussiansBackwardCUDA(
 	const torch::Tensor& sh,
 	const int degree,
 	const torch::Tensor& campos,
+	const torch::Tensor& cacheBuffer,
 	const torch::Tensor& geomBuffer,
 	const int R,
 	const int BR,
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
 	torch::Tensor& mask,
+	const bool normalize_grad2D,
 	const bool debug) 
 {
 	const int B = viewmatrix.size(0);
@@ -177,7 +179,8 @@ RasterizeGaussiansBackwardCUDA(
 	torch::Tensor dL_drotations = torch::zeros({P, 4}, means3D.options());
 	torch::Tensor dL_dsh = torch::zeros({P, M, 3}, means3D.options());
 
-	torch::Tensor point_idx = torch::zeros({BR}, means3D.options().dtype(torch::kInt32));
+	torch::Tensor point_idx = torch::zeros({BR, 1}, means3D.options().dtype(torch::kInt32));
+	torch::Tensor dL_dmeans2D_sum = torch::zeros({P, 4}, means3D.options());
 	if(BR != 0)
 	{  
 		CudaRasterizer::Rasterizer::backward(P, degree, M, B, R, BR,
@@ -194,6 +197,7 @@ RasterizeGaussiansBackwardCUDA(
 		tan_fovx,
 		tan_fovy,
 		radii.contiguous().data<int>(),
+		reinterpret_cast<char*>(cacheBuffer.contiguous().data_ptr()),
 		reinterpret_cast<char*>(geomBuffer.contiguous().data_ptr()),
 		reinterpret_cast<char*>(binningBuffer.contiguous().data_ptr()),
 		reinterpret_cast<char*>(imageBuffer.contiguous().data_ptr()),
@@ -211,14 +215,12 @@ RasterizeGaussiansBackwardCUDA(
 		dL_drotations.contiguous().data<float>(),
 		mask.contiguous().data<int>(),
 		point_idx.contiguous().data<int>(),
+		normalize_grad2D,
 		debug);
+		
+		point_idx = point_idx.to(torch::kInt64);
+		dL_dmeans2D_sum.scatter_add_(0, point_idx.expand({-1, 4}), dL_dmeans2D);
 	}
-	
-	point_idx = point_idx.to(torch::kInt64);
-
-	torch::Tensor dL_dmeans2D_sum = torch::zeros({P, 4}, means3D.options());
-	dL_dmeans2D_sum.scatter_add_(0, point_idx.unsqueeze(-1).expand({-1, 4}), dL_dmeans2D);
-	dL_dmeans2D = torch::Tensor();
 
   	return std::make_tuple(dL_dmeans2D_sum, dL_dopacity, dL_dmeans3D, dL_dsh, dL_dscales, dL_drotations);
 }

@@ -61,6 +61,7 @@ namespace FORWARD
 		float4* conic_opacity,
 		const dim3 grid,
 		uint32_t* tiles_touched,
+		uint32_t* tiles_touched_nomask,
 		const int* mask,
 		const int* point_index,
 		const int* point_batch_index

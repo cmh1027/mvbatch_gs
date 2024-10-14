@@ -4,13 +4,15 @@
 #include <tuple>
 #include <string>
 
-std::tuple<torch::Tensor,torch::Tensor,torch::Tensor,torch::Tensor,torch::Tensor>
+std::tuple<torch::Tensor,torch::Tensor,torch::Tensor,torch::Tensor, torch::Tensor>
 fusedssim(
     float C1,
     float C2,
+    int mask_size,
     torch::Tensor &img1,
     torch::Tensor &img2,
     torch::Tensor &mask,
+    torch::Tensor &ssim_buffer,
     bool train
 );
 

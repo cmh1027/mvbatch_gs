@@ -50,6 +50,7 @@ namespace CudaRasterizer
 		float* rgb;
 		uint32_t* point_offsets;
 		uint32_t* tiles_touched;
+		uint32_t* tiles_touched_nomask;
 		int* point_index;
 		int* point_batch_index;
 

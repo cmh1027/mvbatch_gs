@@ -502,7 +502,7 @@ class GaussianModel:
         if available < selected_pts_mask.sum():
             selected_pts_mask[selected_pts_mask.nonzero()[available:]] = False
         stds = self.get_scaling[selected_pts_mask].repeat(N,1)
-        means =torch.zeros((stds.size(0), 3),device="cuda")
+        means = torch.zeros((stds.size(0), 3),device="cuda")
         samples = torch.normal(mean=means, std=stds)
         rots = build_rotation(self._rotation[selected_pts_mask]).repeat(N,1,1)
         new_xyz = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.get_xyz[selected_pts_mask].repeat(N, 1)
@@ -553,8 +553,7 @@ class GaussianModel:
         self.prune_points(prune_mask)
         torch.cuda.empty_cache()
 
-    def add_densification_stats(self, viewspace_point_tensor_grad, viewspace_point_tensor_abs_grad, shs_grad, update_filter):
+    def add_densification_stats(self, viewspace_point_tensor_grad, viewspace_point_tensor_abs_grad, update_filter):
         self.xyz_gradient_accum[update_filter] += viewspace_point_tensor_grad[update_filter]
         self.xyz_gradient_accum_abs[update_filter] += viewspace_point_tensor_abs_grad[update_filter]
-        self.shs_gradient_accum[update_filter] += shs_grad[update_filter]
         self.denom[update_filter] += 1

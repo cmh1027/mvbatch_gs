@@ -12,27 +12,27 @@
 import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
-from math import exp
-
+from fused_ssim import fused_ssim
+import math
 window = None
 
 
-def collage_l1_loss(network_output, gt, mask, N):
-    loss = torch.abs((network_output - gt)).view(3, -1).sum(dim=0)
+def collage_l1_loss(pred, gt, mask, N):
+    loss = torch.abs((pred - gt)).view(3, -1).sum(dim=0)
     mask = mask.view(3, -1)[0]
-    idx_count = mask.bincount()
+    idx_count = mask.bincount().clamp_(min=1)
     loss_sum = torch.zeros(len(idx_count), device=torch.device('cuda')).scatter_add_(0, mask, loss)
     return (loss_sum / idx_count).sum()
 
-def l1_loss(network_output, gt):
-    loss = torch.abs((network_output - gt))
+def l1_loss(pred, gt):
+    loss = torch.abs((pred - gt))
     return loss, loss.mean()
 
-def l2_loss(network_output, gt):
-    return ((network_output - gt) ** 2).mean()
+def l2_loss(pred, gt):
+    return ((pred - gt) ** 2).mean()
 
 def gaussian(window_size, sigma):
-    gauss = torch.Tensor([exp(-(x - window_size // 2) ** 2 / float(2 * sigma ** 2)) for x in range(window_size)])
+    gauss = torch.Tensor([math.exp(-(x - window_size // 2) ** 2 / float(2 * sigma ** 2)) for x in range(window_size)])
     return gauss / gauss.sum()
 
 def create_window(window_size, channel):
@@ -41,14 +41,17 @@ def create_window(window_size, channel):
     window = Variable(_2D_window.expand(channel, 1, window_size, window_size).contiguous())
     return window
 
-def ssim(img1, img2, window_size=11, mask=None):
-    channel = img1.size(-3)
-    global window
-    if window is None:
-        window = create_window(window_size, channel)
-        if img1.is_cuda:
-            window = window.cuda()
-    return _ssim(img1, img2, window, window_size, channel, mask=mask)
+def ssim(img1, img2, mask=None, mask_size=1, ssim_buffer=None):
+    return fused_ssim(img1, img2, mask, mask_size=mask_size, ssim_buffer=ssim_buffer)
+
+# def ssim(img1, img2, window_size=11, mask=None):
+#     channel = img1.size(-3)
+#     global window
+#     if window is None:
+#         window = create_window(window_size, channel)
+#         if img1.is_cuda:
+#             window = window.cuda()
+#     return _ssim(img1, img2, window, window_size, channel, mask=mask)
 
 def conv2d(img, window, padding, groups, mask=None):
     if mask is None:
@@ -81,5 +84,19 @@ def _ssim(img1, img2, window, window_size, channel, mask=None):
 
     return ssim_map
 
-
+def get_lambda_dssim(opt, iteration):
+    if opt.lambda_dssim_init == opt.lambda_dssim_end:
+        return opt.lambda_dssim_init
+    u = opt.lambda_dssim_u
+    v = opt.lambda_dssim_v
+    assert u < v
+    l = iteration / opt.iterations
+    if l < u:
+        coef = 0
+    elif u <= l < v:
+        t = math.pi * (l - u) / (v - u)
+        coef = 0.5 * (1 - math.cos(t))
+    else:
+        coef = 1
+    return opt.lambda_dssim_init * (1-coef) + opt.lambda_dssim_end * coef
 

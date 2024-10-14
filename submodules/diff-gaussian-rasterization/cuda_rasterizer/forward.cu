@@ -243,6 +243,7 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
+	uint32_t* tiles_touched_nomask,
 	const int* mask,
 	const int* point_index,
 	const int* point_batch_index
@@ -303,12 +304,13 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
 	uint2 rect_min, rect_max;
 	getRect(point_image, my_radius, rect_min, rect_max, grid);
-	uint tiles = 0;
+	uint tiles = 0, tiles_nomask = 0;
 	for (int y = rect_min.y; y < rect_max.y; y++)
 	{
 		for (int x = rect_min.x; x < rect_max.x; x++)
 		{
 			if(mask[y * horizontal_blocks + x] == batch_idx) ++tiles;
+			++tiles_nomask;
 		}
 	}
 	if (tiles == 0)
@@ -326,6 +328,7 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	// Inverse 2D covariance and opacity neatly pack into one float4
 	conic_opacity[idx] = { conic.x, conic.y, conic.z, opacities[point_idx] };
 	tiles_touched[idx] = tiles;
+	tiles_touched_nomask[idx] = tiles_nomask;
 }
 
 // Main rasterization method. Collaboratively works on one tile per
@@ -521,6 +524,7 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
+	uint32_t* tiles_touched_nomask,
 	const int* mask,
 	const int* point_index,
 	const int* point_batch_index
@@ -549,6 +553,7 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 		conic_opacity,
 		grid,
 		tiles_touched,
+		tiles_touched_nomask,
 		mask,
 		point_index,
 		point_batch_index

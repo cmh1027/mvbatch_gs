@@ -66,6 +66,7 @@ namespace CudaRasterizer
 			const float* campos,
 			const float tan_fovx, float tan_fovy,
 			const int* radii,
+			char* cache_buffer,
 			char* geom_buffer,
 			char* binning_buffer,
 			char* image_buffer,
@@ -83,6 +84,7 @@ namespace CudaRasterizer
 			float* dL_drot,
 			const int* mask,
 			int* point_idx,
+			bool normalize_grad2D,
 			bool debug);
 	};
 };

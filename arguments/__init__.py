@@ -90,22 +90,29 @@ class OptimizationParams(ParamGroup):
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
         self.percent_dense = 0.01
-        self.lambda_dssim = 0.2
+        self.uncertainty_lr = 0.005
+
+        self.lambda_dssim = -1
+        self.lambda_dssim_init = 0.2
+        self.lambda_dssim_end = 0.2
+        self.lambda_dssim_u = 0.1
+        self.lambda_dssim_v = 0.5
+
         self.densification_interval = 100
         self.densify_from_iter = 500
         self.densify_until_iter = 25_000
         self.random_background = False
         
-
         ### 3dgs ###
         self.opacity_reset_interval = 3000
         self.opacity_reset_threshold = 0.01
         self.densify_grad_threshold = 0.0002
-        self.densify_grad_abs_threshold = 0.0008
+        self.densify_grad_abs_threshold = 0.0004
         self.modulate_densify_grad = 1.
         self.adaptive_grad_threshold = False
         self.adaptive_grad_percentile = 0.8375
         self.max_points = -1
+        self.normalize_grad2D = False
 
         ### 3dgs-mcmc ###
         self.noise_lr = 5e5
@@ -118,8 +125,8 @@ class OptimizationParams(ParamGroup):
         self.batch_partition = False
         self.batch_partition_denom = -1
         self.batch_size_decrease = False
-        self.mask_height = 8
-        self.mask_width = 8
+        self.mask_height = 16
+        self.mask_width = 16
 
         self.single_partial_rays = False
         self.single_partial_rays_denom = 1

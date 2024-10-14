@@ -65,6 +65,26 @@ __global__ void checkFrustum(int P,
 	present[idx] = in_frustum(idx, orig_points, viewmatrix, projmatrix, p_view);
 }
 
+__global__ void normalize_means2D(
+	int BR,
+	const uint32_t* tiles_touched,
+	const uint32_t* tiles_touched_nomask,
+	const int* point_idx,
+	const int* batch_num_rendered,
+	float4* dL_dmean2D
+)
+{
+	auto idx = cg::this_grid().thread_rank();
+	if (idx >= BR)
+		return;
+	auto denom =  ((float)tiles_touched[idx] * batch_num_rendered[point_idx[idx]]);
+	assert(denom > 0);
+	dL_dmean2D[idx].x = dL_dmean2D[idx].x * (tiles_touched_nomask[idx] / denom);
+	dL_dmean2D[idx].y = dL_dmean2D[idx].y * (tiles_touched_nomask[idx] / denom);
+	dL_dmean2D[idx].z = dL_dmean2D[idx].z * (tiles_touched_nomask[idx] / denom);
+	dL_dmean2D[idx].w = dL_dmean2D[idx].w * (tiles_touched_nomask[idx] / denom);
+}
+
 __global__ void savePointIndex(
 	int P, int B,
     const int* batch_num_rendered_sums,
@@ -205,9 +225,12 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 	obtain(chunk, geom.point_index, BR, 128);
 	obtain(chunk, geom.point_batch_index, BR, 128);
 	obtain(chunk, geom.tiles_touched, BR, 128);
+	obtain(chunk, geom.tiles_touched_nomask, BR, 128);
 	obtain(chunk, geom.point_offsets, BR, 128);
 	cub::DeviceScan::InclusiveSum(nullptr, geom.scan_size, geom.tiles_touched, geom.tiles_touched, BR);
 	obtain(chunk, geom.scanning_space, geom.scan_size, 128);
+
+
 	return geom;
 }
 
@@ -322,6 +345,7 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		geomState.conic_opacity,
 		tile_grid,
 		geomState.tiles_touched,
+		geomState.tiles_touched_nomask,
 		mask,
 		geomState.point_index,
 		geomState.point_batch_index
@@ -413,6 +437,7 @@ void CudaRasterizer::Rasterizer::backward(
 	const float* campos,
 	const float tan_fovx, float tan_fovy,
 	const int* radii,
+	char* cache_buffer,
 	char* geom_buffer,
 	char* binning_buffer,
 	char* img_buffer,
@@ -430,13 +455,15 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_drot,
 	const int* mask,
 	int* point_idx,
+	bool normalize_grad2D,
 	bool debug)
 {
+	CacheState cacheState = CacheState::fromChunk(cache_buffer, P, B);
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, BR);
 	BinningState binningState = BinningState::fromChunk(binning_buffer, R);
 	ImageState imgState = ImageState::fromChunk(img_buffer, width * height);
-
-
+	
+	assert(sizeof(int) == sizeof(uint32_t));
 	cudaMemcpy(point_idx, geomState.point_index, sizeof(int)*BR, cudaMemcpyDeviceToDevice);
 	const float focal_y = height / (2.0f * tan_fovy);
 	const float focal_x = width / (2.0f * tan_fovx);
@@ -499,4 +526,7 @@ void CudaRasterizer::Rasterizer::backward(
 		geomState.point_index,
 		geomState.point_batch_index
 	), debug)
+	if(normalize_grad2D){
+		normalize_means2D << <(BR + 255) / 256, 256 >> > (BR, geomState.tiles_touched, geomState.tiles_touched_nomask, geomState.point_index, cacheState.batch_num_rendered, (float4*)dL_dmean2D);
+	}
 }
