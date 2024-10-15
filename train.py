@@ -181,9 +181,9 @@ def training(dataset, opt, pipe, args):
 			collage_mask = collage_mask.unsqueeze(0).repeat(3,1,1)
 			collage_gt = torch.gather(gt_images, 0, collage_mask.unsqueeze(0)).squeeze(0)
 
-			pixel_loss = collage_pixel_loss(image, collage_gt, collage_mask, beta=beta, ltype=opt.loss_type)
+			Ll = collage_pixel_loss(image, collage_gt, collage_mask, beta=beta, ltype=opt.loss_type)
 
-			loss = (1.0 - lambda_dssim) * pixel_loss
+			loss = (1.0 - lambda_dssim) * Ll
 			if lambda_dssim > 0:
 				for i in range(len(cams)):
 					collage_mask_partial = torch.where(collage_mask[0:1] == i, 1., 0.)
@@ -192,8 +192,8 @@ def training(dataset, opt, pipe, args):
 
 		else:
 			gt_image = cams[0].original_image
-			_, pixel_loss = pixel_loss(image, gt_image, beta=beta, ltype=opt.loss_type)
-			loss = (1.0 - lambda_dssim) * pixel_loss
+			_, Ll = pixel_loss(image, gt_image, beta=beta, ltype=opt.loss_type)
+			loss = (1.0 - lambda_dssim) * Ll
 			if lambda_dssim > 0:
 				loss += lambda_dssim * (1 - ssim(image, gt_image)).mean()
 			
@@ -234,7 +234,7 @@ def training(dataset, opt, pipe, args):
 				progress_bar.close()
 			# Log and save
 			if not opt.evaluate_time:
-				training_report(opt, tb_writer, iteration, pixel_loss, loss, testing_iterations, scene, render, (pipe, background))
+				training_report(opt, tb_writer, iteration, Ll, loss, testing_iterations, scene, render, (pipe, background))
 
 			if (iteration in saving_iterations and not opt.evaluate_time):
 				print("\n[ITER {}] Saving Gaussians".format(iteration))
@@ -337,9 +337,9 @@ def prepare_output_and_logger(args):
 		print("Tensorboard not available: not logging progress")
 	return tb_writer
 
-def training_report(opt, tb_writer, iteration, pixel_loss, loss, testing_iterations, scene : Scene, renderFunc, renderArgs):
+def training_report(opt, tb_writer, iteration, Ll, loss, testing_iterations, scene : Scene, renderFunc, renderArgs):
 	if tb_writer:
-		tb_writer.add_scalar(f'train_loss_patches/{opt.loss_type}_loss', pixel_loss.item(), iteration)
+		tb_writer.add_scalar(f'train_loss_patches/{opt.loss_type}_loss', Ll.item(), iteration)
 		tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
 
 	# Report test and samples of training set
