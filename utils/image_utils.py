@@ -70,7 +70,7 @@ def apply_float_colormap(image, colormap):
     assert image_long_max <= 255, f"the max value is {image_long_max}"
     return torch.tensor(matplotlib.colormaps[colormap].colors, device=image.device)[image_long[..., 0]]
 
-def apply_colormap(image):
+def apply_colormap(image, colormap):
     # default for rgb images
     if image.shape[-1] == 3:
         return image
@@ -78,7 +78,7 @@ def apply_colormap(image):
     if image.shape[-1] == 1 and torch.is_floating_point(image):
         output = image
         output = torch.clip(output, 0, 1)
-        return apply_float_colormap(output, "default")
+        return apply_float_colormap(output, colormap)
 
     raise NotImplementedError
 
@@ -88,12 +88,12 @@ def rescale_gt_depth(pred, gt):
     gt = (gt - gt_m) / (gt_M - gt_m) * (pred_M - pred_m) + pred_m
     return gt
 
-def apply_depth_colormap(depth, near_plane=None, far_plane=None):
+def apply_depth_colormap(depth, near_plane=None, far_plane=None, colormap="default"):
     near_plane = near_plane if near_plane is not None else float(torch.min(depth))
     far_plane = far_plane if far_plane is not None else float(torch.max(depth))
     depth = torch.clip(depth, min=near_plane, max=far_plane)
     depth = (depth - near_plane) / (far_plane - near_plane + 1e-10)
     depth = torch.clip(depth, 0, 1)
-    colored_image = apply_colormap(depth)
+    colored_image = apply_colormap(depth, colormap)
     return colored_image.permute(2, 0, 1)
 

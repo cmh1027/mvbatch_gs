@@ -14,7 +14,7 @@ import json
 import torch
 import torch.nn.functional as F
 from random import randint
-from utils.loss_utils import collage_l1_loss, l1_loss, ssim, get_lambda_dssim
+from utils.loss_utils import collage_pixel_loss, pixel_loss, ssim, get_lambda_dssim
 from fused_ssim import fused_ssim
 from lpipsPyTorch import lpips
 from gaussian_renderer import render, network_gui
@@ -181,7 +181,7 @@ def training(dataset, opt, pipe, args):
 			collage_mask = collage_mask.unsqueeze(0).repeat(3,1,1)
 			collage_gt = torch.gather(gt_images, 0, collage_mask.unsqueeze(0)).squeeze(0)
 
-			Ll1 = collage_l1_loss(image, collage_gt, collage_mask, beta=beta)
+			Ll1 = collage_pixel_loss(image, collage_gt, collage_mask, beta=beta, ltype=opt.loss_type)
 
 			loss = (1.0 - lambda_dssim) * Ll1
 			if lambda_dssim > 0:
@@ -192,7 +192,7 @@ def training(dataset, opt, pipe, args):
 
 		else:
 			gt_image = cams[0].original_image
-			_, Ll1 = l1_loss(image, gt_image, beta=beta)
+			_, Ll1 = pixel_loss(image, gt_image, beta=beta, ltype=opt.loss_type)
 			loss = (1.0 - lambda_dssim) * Ll1
 			if lambda_dssim > 0:
 				loss += lambda_dssim * (1 - ssim(image, gt_image)).mean()
@@ -234,7 +234,7 @@ def training(dataset, opt, pipe, args):
 				progress_bar.close()
 			# Log and save
 			if not opt.evaluate_time:
-				training_report(opt, tb_writer, iteration, Ll1, loss, l1_loss, testing_iterations, scene, render, (pipe, background))
+				training_report(opt, tb_writer, iteration, Ll1, loss, testing_iterations, scene, render, (pipe, background))
 
 			if (iteration in saving_iterations and not opt.evaluate_time):
 				print("\n[ITER {}] Saving Gaussians".format(iteration))
@@ -269,11 +269,13 @@ def training(dataset, opt, pipe, args):
 				os.makedirs(os.path.join(dataset.model_path, "vis"), exist_ok=True)
 				with torch.no_grad():
 					render_pkg = render(viewpoints[cam_idx], gaussians, pipe, bg)
-					image = render_pkg["render"][:3, ...].cpu()
-					depth = render_pkg["depth"].cpu()
-					gt_image = viewpoints[cam_idx].original_image.cpu()
-					beta_map = render_pkg["beta"].cpu() if opt.use_beta else torch.zeros_like(depth)
-					pred = torch.cat([image, apply_depth_colormap(depth.permute(1, 2, 0))], dim=-1)
+					image = render_pkg["render"][:3, ...]
+					depth = render_pkg["depth"] 
+					gt_image = viewpoints[cam_idx].original_image
+					l1_map = torch.abs(image-gt_image).mean(dim=0, keepdim=True)
+					aux_map = l1_map if opt.use_beta else depth
+					beta_map = render_pkg["beta"] if opt.use_beta else torch.zeros_like(depth)
+					pred = torch.cat([image, apply_depth_colormap(aux_map.permute(1, 2, 0), colormap='gray')], dim=-1)
 					gt = torch.cat([gt_image, apply_depth_colormap(beta_map.permute(1, 2, 0))], dim=-1)
 					figs = [pred, gt]
 					save_image(torch.cat(figs, dim=1), os.path.join(dataset.model_path, f"vis/iter_{iteration}.png"))
@@ -335,9 +337,9 @@ def prepare_output_and_logger(args):
 		print("Tensorboard not available: not logging progress")
 	return tb_writer
 
-def training_report(opt, tb_writer, iteration, Ll1, loss, l1_loss, testing_iterations, scene : Scene, renderFunc, renderArgs):
+def training_report(opt, tb_writer, iteration, Ll1, loss, testing_iterations, scene : Scene, renderFunc, renderArgs):
 	if tb_writer:
-		tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
+		tb_writer.add_scalar(f'train_loss_patches/{opt.loss_type}_loss', Ll1.item(), iteration)
 		tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
 
 	# Report test and samples of training set
@@ -361,7 +363,7 @@ def training_report(opt, tb_writer, iteration, Ll1, loss, l1_loss, testing_itera
 						tb_writer.add_images('test' + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
 						if iteration == testing_iterations[0]:
 							tb_writer.add_images('test' + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
-					l1_test += l1_loss(image, gt_image)[1].double()
+					l1_test += pixel_loss(image, gt_image, ltype=opt.loss_type)[1].double()
 
 
 					psnr_test += psnr(image, gt_image).mean().double()
@@ -389,7 +391,7 @@ def training_report(opt, tb_writer, iteration, Ll1, loss, l1_loss, testing_itera
 						tb_writer.add_scalar('test' + '/loss_viewpoint - pcoef_freq', pcoef_freq_test, iteration)
 						tb_writer.add_scalar('test' + '/loss_viewpoint - pcoef_freq_low', pcoef_low_freq_test, iteration)
 						tb_writer.add_scalar('test' + '/loss_viewpoint - pcoef_freq_high', pcoef_high_freq_test, iteration)
-					tb_writer.add_scalar(mode + '/loss_viewpoint - l1_loss', l1_test, iteration)
+					tb_writer.add_scalar(mode + f'/loss_viewpoint - {opt.loss_type}_loss', l1_test, iteration)
 					tb_writer.add_scalar(mode + '/loss_viewpoint - psnr', psnr_test, iteration)
 					if not opt.only_psnr:
 						tb_writer.add_scalar(mode + '/loss_viewpoint - ssim', ssim_test, iteration)

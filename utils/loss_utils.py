@@ -16,9 +16,14 @@ from fused_ssim import fused_ssim
 import math
 window = None
 
+loss_dict = {
+    "l1" : lambda x1, x2: torch.abs(x1 - x2),
+    "l2" : lambda x1, x2: (x1 - x2) ** 2
+}
 
-def collage_l1_loss(pred, gt, mask, beta=None):
-    loss = torch.abs((pred - gt)).view(3, -1).mean(dim=0) # (H, W)
+
+def collage_pixel_loss(pred, gt, mask, beta=None, ltype="l1"):
+    loss = loss_dict[ltype](pred, gt).view(3, -1).mean(dim=0) # (H, W)
     if beta is not None:
         beta = beta.view(1, -1)
         loss = loss + 0.5 * loss.detach() / (beta[0] ** 2) + (3 + torch.log(beta[0]))
@@ -27,16 +32,13 @@ def collage_l1_loss(pred, gt, mask, beta=None):
     loss_sum = torch.zeros(len(idx_count), device=torch.device('cuda')).scatter_add_(0, mask, loss)
     return (loss_sum / idx_count).sum()
 
-def l1_loss(pred, gt, beta=None):
-    loss = torch.abs((pred - gt)).view(3, -1)
+def pixel_loss(pred, gt, beta=None, ltype="l1"):
+    loss = loss_dict[ltype](pred, gt).view(3, -1)
     if beta is not None:
         beta = beta.view(1, -1)
         loss = loss.mean(dim=0)
         loss = loss + 0.5 * loss.detach() / (beta[0] ** 2) + (3 + torch.log(beta[0]))
     return loss, loss.mean()
-
-def l2_loss(pred, gt):
-    return ((pred - gt) ** 2).mean()
 
 def gaussian(window_size, sigma):
     gauss = torch.Tensor([math.exp(-(x - window_size // 2) ** 2 / float(2 * sigma ** 2)) for x in range(window_size)])
