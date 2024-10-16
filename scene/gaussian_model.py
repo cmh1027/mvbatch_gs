@@ -128,6 +128,29 @@ class GaussianModel:
     def get_beta(self):
         return self.beta_activation(self._beta)
 
+    @torch.no_grad()
+    def get_prob(self, method="opacity", opacity_threshold=1.0, beta_threshold=1.0, opacity_prune="bigger"):
+        if method == "opacity":
+            probs = self.get_opacity
+            if opacity_prune == "bigger":
+                probs[probs > opacity_threshold] = 0.
+            else:
+                probs[probs < opacity_threshold] = 0.
+        elif method == "beta":
+            probs = self.get_beta
+            # probs[probs < beta_threshold] = 0.
+        elif method == "both":
+            probs = self.get_opacity
+            if opacity_prune == "bigger":
+                probs[probs > opacity_threshold] = 0.
+            else:
+                probs[probs < opacity_threshold] = 0.
+            probs = probs * torch.sigmoid(self.get_beta)
+        else:
+            raise NotImplementedError
+        assert probs.sum() > 0
+        return probs
+
     def get_covariance(self, scaling_modifier = 1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
 
@@ -425,15 +448,15 @@ class GaussianModel:
         return self._xyz[idxs], self._features_dc[idxs], self._features_rest[idxs], new_opacity, new_scaling, self._rotation[idxs], self._beta[idxs]
 
 
-    def _sample_alives(self, probs, num, alive_indices=None):
-        sampled_idxs = torch.multinomial(probs, num, replacement=True)
+    def _sample_alives(self, probs, num, alive_indices=None, replacement=True):
+        sampled_idxs = torch.multinomial(probs, num, replacement=replacement) 
         if alive_indices is not None:
             sampled_idxs = alive_indices[sampled_idxs]
-        ratio = torch.bincount(sampled_idxs, minlength=self._xyz.shape[0]).unsqueeze(-1)
+        ratio = torch.bincount(sampled_idxs, minlength=self._xyz.shape[0]).unsqueeze(-1) # [P, 1]
         return sampled_idxs, ratio
     
 
-    def relocate_gs(self, dead_mask=None):
+    def relocate_gs(self, opt, dead_mask=None):
         if dead_mask.sum() == 0:
             return
 
@@ -443,12 +466,11 @@ class GaussianModel:
 
         if alive_indices.shape[0] <= 0:
             return
-
-        # sample from alive ones based on opacity
-        probs = self.get_opacity[alive_indices, 0]
+        
+        num_gs = dead_indices.shape[0]
+        probs = self.get_prob(method=opt.prob_type, opacity_threshold=opt.sample_opacity_threshold, opacity_prune=opt.sample_opacity_prune)[alive_indices, 0]
         probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
-        reinit_idx, ratio = self._sample_alives(alive_indices=alive_indices, probs=probs, num=dead_indices.shape[0])
-
+        idx, ratio = self._sample_alives(alive_indices=alive_indices, probs=probs, num=num_gs)
         (
             self._xyz[dead_indices], 
             self._features_dc[dead_indices],
@@ -457,27 +479,38 @@ class GaussianModel:
             self._scaling[dead_indices],
             self._rotation[dead_indices],
             self._beta[dead_indices]
-        ) = self._update_params(reinit_idx, ratio=ratio)
-        
-        self._opacity[reinit_idx] = self._opacity[dead_indices]
-        self._scaling[reinit_idx] = self._scaling[dead_indices]
+        ) = self._update_params(idx, ratio=ratio)
 
-        self.replace_tensors_to_optimizer(inds=reinit_idx) 
+        self._opacity[idx] = self._opacity[dead_indices]
+        self._scaling[idx] = self._scaling[dead_indices]
+
+        self.replace_tensors_to_optimizer(inds=idx) 
         
-    def add_new_gs(self, opt, cap_max, add_ratio=0.05, iteration=None):
+    def add_new_gs(self, opt, tb_writer, cap_max, add_ratio=0.05, beta_add_ratio=0., iteration=None):
         current_num_points = self._opacity.shape[0]
 
-        target_num = min(cap_max, int((1+add_ratio) * current_num_points))
-        num_gs = max(0, target_num - current_num_points)
+        target_num = min(cap_max, int((1+add_ratio+beta_add_ratio) * current_num_points))
+        num_gs_total = max(0, target_num - current_num_points)
 
-        if num_gs <= 0:
+        if num_gs_total <= 0:
             return 0
-        
-        probs = self.get_opacity.squeeze(-1) 
-        EPS = torch.finfo(torch.float32).eps
-        probs = probs / (probs.sum() + EPS)
-        
-        add_idx, ratio = self._sample_alives(probs=probs, num=num_gs)
+        num_gs = int(num_gs_total * add_ratio / (add_ratio + beta_add_ratio))
+        beta_num_gs = num_gs_total - num_gs
+
+        probs = self.get_prob(method=opt.prob_type, opacity_threshold=opt.sample_opacity_threshold, opacity_prune=opt.sample_opacity_prune).squeeze(-1) 
+        probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
+        idx, ratio = self._sample_alives(probs=probs, num=num_gs)
+        if opt.log_densified_property and iteration % 500 == 0:
+            tb_writer.add_histogram("split/opacity", self.get_opacity[idx.unique()][..., 0], iteration)
+            tb_writer.add_histogram("split/scale_norm", self.get_scaling[idx.unique()].norm(dim=-1), iteration)
+            tb_writer.add_histogram("split/scale_max", self.get_scaling[idx.unique()].max(dim=-1).values, iteration)
+            tb_writer.add_histogram("split/beta", self.get_beta[idx.unique()][..., 0], iteration)
+        # if beta_add_ratio > 0:
+        #     probs = self.get_prob(method="beta").squeeze(-1) 
+        #     probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
+        #     beta_idx, beta_ratio = self._sample_alives(probs=probs, num=beta_num_gs)
+        #     idx = torch.cat([idx, beta_idx])
+        #     ratio = ratio + beta_ratio
         (
             new_xyz, 
             new_features_dc,
@@ -486,13 +519,13 @@ class GaussianModel:
             new_scaling,
             new_rotation,
             new_beta,
-        ) = self._update_params(add_idx, ratio=ratio)
+        ) = self._update_params(idx, ratio=ratio)
 
-        self._opacity[add_idx] = new_opacity
-        self._scaling[add_idx] = new_scaling
+        self._opacity[idx] = new_opacity
+        self._scaling[idx] = new_scaling
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_beta)
-        self.replace_tensors_to_optimizer(inds=add_idx)
+        self.replace_tensors_to_optimizer(inds=idx)
     
     ########## original 3dgs ##########
 
@@ -525,7 +558,7 @@ class GaussianModel:
         new_features_dc = self._features_dc[selected_pts_mask].repeat(N,1,1)
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
-        new_beta = self._opacity[selected_pts_mask].repeat(N,1)
+        new_beta = self._beta[selected_pts_mask].repeat(N,1)
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_beta)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))

@@ -89,21 +89,22 @@ class OptimizationParams(ParamGroup):
         self.opacity_lr = 0.05
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
-        self.beta_lr = 0.05
+        self.beta_lr = 0.0025
         self.percent_dense = 0.01
         self.loss_type = "l1"
+        self.beta_loss_type = "l2"
 
         self.lambda_dssim = -1
         self.lambda_dssim_init = 0.2
         self.lambda_dssim_end = 0.2
-        self.lambda_dssim_u = 0.1
-        self.lambda_dssim_v = 0.5
+        self.lambda_dssim_u = 0.2
+        self.lambda_dssim_v = 0.8
 
         self.densification_interval = 100
         self.densify_from_iter = 500
         self.densify_until_iter = 25_000
         self.random_background = False
-        
+
         ### 3dgs ###
         self.opacity_reset_interval = 3000
         self.opacity_reset_threshold = 0.01
@@ -116,33 +117,41 @@ class OptimizationParams(ParamGroup):
         self.normalize_grad2D = False
 
         ### 3dgs-mcmc ###
+        self.add_ratio = 0.05
         self.noise_lr = 5e5
         self.scale_reg = 0.01
         self.opacity_reg = 0.01
-
+        self.prob_type = "opacity" # ["opacity", "beta", "both"]
+        self.sample_opacity_threshold = 1.0
+        self.sample_opacity_prune = "bigger"
+        self.sample_beta_threshold = 1.0
+        self.beta_add_ratio = 0.
+        
         self.batch_sample_strategy = "max" # ["min", "max", "random"]
         self.batch_size = 1
         self.batch_until = -1
         self.batch_partition = False
         self.batch_partition_denom = -1
-        self.batch_size_decrease = False
         self.mask_height = 16
         self.mask_width = 16
+        self.count_tile_sample = False
+        self.sample_decrease = False
 
         self.single_partial_rays = False
         self.single_partial_rays_denom = 1
         self.log_single_partial = False
         self.log_single_partial_interval = 100
 
-        self.add_ratio = 0.05
-
         self.only_psnr = False
         self.log_batch = False
         self.log_batch_interval = 1
+        self.log_densified_property = False
 
         self.evaluate_time = False
         self.gs_type = "mcmc" # ["original", "mcmc"]
+
         self.use_beta = False
+        self.beta_detach = False
         self.beta_min = 0.1
         super().__init__(parser, "Optimization Parameters")
 

@@ -20,7 +20,7 @@ from lpipsPyTorch import lpips
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
-from utils.general_utils import safe_state
+from utils.general_utils import safe_state, draw_graph, draw_two_graphs
 from tqdm import tqdm
 from utils.image_utils import psnr, apply_depth_colormap, pcoef_freq
 from argparse import ArgumentParser, Namespace
@@ -106,8 +106,20 @@ def training(dataset, opt, pipe, args):
 	print(f"tile size {opt.mask_height} x {opt.mask_width}")
 
 	start_time = time.time()
+
+	# sampled_count = torch.rand((len(scene.getTrainCameras()), partial_height*partial_width), device=torch.device('cuda')) * 1e-5
+	prob = torch.ones(opt.batch_size, device=torch.device('cuda'))
+	prob_dec = 1 / (torch.arange(opt.batch_size, 0, -1, device=torch.device('cuda')) * opt.iterations / opt.batch_size)
+
+
 	for iteration in range(first_iter, opt.iterations + 1): 
 		lambda_dssim = get_lambda_dssim(opt, iteration)
+		if len(prob) > 1:
+			prob = prob - prob_dec
+			if opt.sample_decrease and prob[-1] <= 0:
+				print(f"BATCH SIZE {opt.batch_size} => {opt.batch_size - 1}")
+				opt.batch_size -= 1
+				prob, prob_dec = prob[:-1], prob_dec[:-1]
 
 		gt_images = []
 		if iteration == forced_exit:
@@ -122,10 +134,6 @@ def training(dataset, opt, pipe, args):
 		if opt.batch_until > 0 and iteration == (opt.batch_until+1) and opt.batch_size > 1:
 			print("BATCH IS TURNED OFF")
 			opt.batch_size = 1
-		
-		if opt.batch_size_decrease and iteration in args.batch_size_decrease_interval and opt.batch_size > 1:
-			print(f"BATCH SIZE {opt.batch_size} => {opt.batch_size // 2}")
-			opt.batch_size = opt.batch_size // 2
 
 		# Pick a random Camera
 		viewpoints = scene.getTrainCameras().copy()
@@ -135,9 +143,9 @@ def training(dataset, opt, pipe, args):
 		cam_idx = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
 
 		if opt.batch_size == 1:
-			cam_idxs = torch.tensor([cam_idx]).cuda()
+			cam_idxs = torch.tensor([cam_idx], device=torch.device('cuda'))
 		else:
-			cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, strategy=opt.batch_sample_strategy).cuda()
+			cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, strategy=opt.batch_sample_strategy)
 		cam_idxs.clamp_(max=len(viewpoints)-1)
 		cams = [viewpoints[idx] for idx in cam_idxs]
 
@@ -149,7 +157,17 @@ def training(dataset, opt, pipe, args):
 		bg = torch.rand((3), device="cuda") if opt.random_background else background
 
 		if len(cams) > 1:
-			pmask = torch.randint(0, len(cams), (partial_height, partial_width), dtype=torch.int32, device=torch.device('cuda'))
+			# if opt.count_tile_sample:
+			# 	prob = sampled_count[cam_idxs] # (batch, PW*PH)
+			# 	prob = prob / prob.sum(dim=0, keepdim=True)
+			# 	pmask = torch.multinomial(prob.T, 1).squeeze()
+			# 	sampled_count.scatter_add_(0, pmask[None], torch.ones_like(sampled_count[0:1]))
+			# 	pmask = pmask.to(torch.int32).reshape(partial_height, partial_width)
+			if opt.sample_decrease:
+				prob_norm = prob / prob.sum()
+				pmask = torch.multinomial(prob_norm, partial_height*partial_width, replacement=True).reshape(partial_height, partial_width).to(torch.int32)
+			else:
+				pmask = torch.randint(0, len(cams), (partial_height, partial_width), dtype=torch.int32, device=torch.device('cuda'))
 		else:
 			pmask = None
 
@@ -181,7 +199,7 @@ def training(dataset, opt, pipe, args):
 			collage_mask = collage_mask.unsqueeze(0).repeat(3,1,1)
 			collage_gt = torch.gather(gt_images, 0, collage_mask.unsqueeze(0)).squeeze(0)
 
-			Ll = collage_pixel_loss(image, collage_gt, collage_mask, beta=beta, ltype=opt.loss_type)
+			Ll = collage_pixel_loss(image, collage_gt, collage_mask, beta=beta, ltype=opt.loss_type, beta_ltype=opt.beta_loss_type, detach=opt.beta_detach)
 
 			loss = (1.0 - lambda_dssim) * Ll
 			if lambda_dssim > 0:
@@ -189,10 +207,9 @@ def training(dataset, opt, pipe, args):
 					collage_mask_partial = torch.where(collage_mask[0:1] == i, 1., 0.)
 					ssim_map = ssim(image, collage_gt, mask=collage_mask_partial, mask_size=opt.mask_width)
 					loss += lambda_dssim * (1 - ssim_map).mean()
-
 		else:
 			gt_image = cams[0].original_image
-			_, Ll = pixel_loss(image, gt_image, beta=beta, ltype=opt.loss_type)
+			Ll = pixel_loss(image, gt_image, beta=beta, ltype=opt.loss_type, beta_ltype=opt.beta_loss_type, detach=opt.beta_detach)
 			loss = (1.0 - lambda_dssim) * Ll
 			if lambda_dssim > 0:
 				loss += lambda_dssim * (1 - ssim(image, gt_image)).mean()
@@ -224,7 +241,8 @@ def training(dataset, opt, pipe, args):
 			if iteration % 10 == 0:
 				postfix = {
 					"Loss": f"{ema_loss_for_log:.{4}f}",
-					"num_pts": len(gaussians._xyz)
+					"num_pts": len(gaussians._xyz),
+					"batch": opt.batch_size
 				}
 				if "lambda_dssim" in locals():
 					postfix["ssim_l"] = lambda_dssim
@@ -256,10 +274,10 @@ def training(dataset, opt, pipe, args):
 
 					elif opt.gs_type == "mcmc":
 						dead_mask = (gaussians.get_opacity <= 0.005).squeeze(-1)
-						gaussians.relocate_gs(dead_mask=dead_mask)
+						gaussians.relocate_gs(opt, dead_mask=dead_mask)
 						if not opt.evaluate_time:
 							tb_writer.add_scalar(f'train/dead_gaussians', dead_mask.sum().item(), iteration)
-						gaussians.add_new_gs(opt, cap_max=args.cap_max, add_ratio=opt.add_ratio, iteration=iteration)
+						gaussians.add_new_gs(opt, tb_writer, iteration=iteration, cap_max=args.cap_max, add_ratio=opt.add_ratio, beta_add_ratio=opt.beta_add_ratio)
 					
 				if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
 					if opt.gs_type == "original":
@@ -276,7 +294,7 @@ def training(dataset, opt, pipe, args):
 					aux_map = l1_map if opt.use_beta else depth
 					beta_map = render_pkg["beta"] if opt.use_beta else torch.zeros_like(depth)
 					pred = torch.cat([image, apply_depth_colormap(aux_map.permute(1, 2, 0), colormap='gray')], dim=-1)
-					gt = torch.cat([gt_image, apply_depth_colormap(beta_map.permute(1, 2, 0))], dim=-1)
+					gt = torch.cat([gt_image, apply_depth_colormap(beta_map.permute(1, 2, 0), colormap='gray')], dim=-1)
 					figs = [pred, gt]
 					save_image(torch.cat(figs, dim=1), os.path.join(dataset.model_path, f"vis/iter_{iteration}.png"))
 
@@ -356,14 +374,14 @@ def training_report(opt, tb_writer, iteration, Ll, loss, testing_iterations, sce
 				pcoef_freq_test = 0.0
 				pcoef_low_freq_test = 0.0
 				pcoef_high_freq_test = 0.0
-				for idx, viewpoint in enumerate(cameras):
+				for idx, viewpoint in tqdm(enumerate(cameras), desc=f"Evaluating {mode}...", leave=False, total=len(cameras)):
 					image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
 					gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
 					if tb_writer and (idx < 5) and mode == 'test':
 						tb_writer.add_images('test' + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
 						if iteration == testing_iterations[0]:
 							tb_writer.add_images('test' + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
-					l1_test += pixel_loss(image, gt_image, ltype=opt.loss_type)[1].double()
+					l1_test += pixel_loss(image, gt_image, ltype=opt.loss_type).double()
 
 
 					psnr_test += psnr(image, gt_image).mean().double()
@@ -387,15 +405,26 @@ def training_report(opt, tb_writer, iteration, Ll, loss, testing_iterations, sce
 
 				print(f"\n[ITER {iteration}] Evaluating {mode}: L1 {'%.5f' % l1_test} PSNR {'%.4f' % psnr_test} SSIM {'%.5f' % ssim_test} LPIPS {'%.5f' % lpips_test}")
 				if tb_writer:
-					if mode == 'test' and not opt.only_psnr:
-						tb_writer.add_scalar('test' + '/loss_viewpoint - pcoef_freq', pcoef_freq_test, iteration)
-						tb_writer.add_scalar('test' + '/loss_viewpoint - pcoef_freq_low', pcoef_low_freq_test, iteration)
-						tb_writer.add_scalar('test' + '/loss_viewpoint - pcoef_freq_high', pcoef_high_freq_test, iteration)
 					tb_writer.add_scalar(mode + f'/loss_viewpoint - {opt.loss_type}_loss', l1_test, iteration)
 					tb_writer.add_scalar(mode + '/loss_viewpoint - psnr', psnr_test, iteration)
 					if not opt.only_psnr:
 						tb_writer.add_scalar(mode + '/loss_viewpoint - ssim', ssim_test, iteration)
 						tb_writer.add_scalar(mode + '/loss_viewpoint - lpips', lpips_test, iteration)
+
+					if mode == 'test':
+						if not opt.only_psnr:
+							tb_writer.add_scalar('test' + '/loss_viewpoint - pcoef_freq', pcoef_freq_test, iteration)
+							tb_writer.add_scalar('test' + '/loss_viewpoint - pcoef_freq_low', pcoef_low_freq_test, iteration)
+							tb_writer.add_scalar('test' + '/loss_viewpoint - pcoef_freq_high', pcoef_high_freq_test, iteration)
+						tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
+						if opt.use_beta:
+							tb_writer.add_histogram("scene/beta_histogram", scene.gaussians.get_beta, iteration)
+							tb_writer.add_image(
+								'scene/opacity-beta', 
+								draw_two_graphs(scene.gaussians.get_opacity, scene.gaussians.get_beta, "opacity", "beta"), 
+								global_step=iteration
+							)
+
 					torch.cuda.empty_cache()
 
 def load_config(config_file):

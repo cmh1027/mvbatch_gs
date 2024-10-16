@@ -21,24 +21,43 @@ loss_dict = {
     "l2" : lambda x1, x2: (x1 - x2) ** 2
 }
 
+beta_dict = {
+    "l1" : lambda beta: beta,
+    "l2" : lambda beta: beta ** 2
+}
 
-def collage_pixel_loss(pred, gt, mask, beta=None, ltype="l1"):
-    loss = loss_dict[ltype](pred, gt).view(3, -1).mean(dim=0) # (H, W)
+beta_reg_dict = {
+    "l1" : lambda beta: torch.log(beta) + 3,
+    "l2" : lambda beta: 2 * (torch.log(beta) + 3)
+}
+
+
+
+def collage_pixel_loss(pred, gt, mask, beta=None, ltype="l1", beta_ltype="l1", detach=False):
+    loss = loss_dict[ltype](pred, gt).view(3, -1).mean(dim=0) # (H*W)
     if beta is not None:
-        beta = beta.view(1, -1)
-        loss = loss + 0.5 * loss.detach() / (beta[0] ** 2) + (3 + torch.log(beta[0]))
+        assert torch.all(beta > 0)
+        beta = beta.flatten()
+        if detach:
+            loss = loss + loss.detach() / beta_dict[beta_ltype](beta) + beta_reg_dict[beta_ltype](beta)
+        else:
+            loss = loss / beta_dict[beta_ltype](beta) + beta_reg_dict[beta_ltype](beta)
     mask = mask.view(3, -1)[0]
     idx_count = mask.bincount().clamp_(min=1)
     loss_sum = torch.zeros(len(idx_count), device=torch.device('cuda')).scatter_add_(0, mask, loss)
     return (loss_sum / idx_count).sum()
 
-def pixel_loss(pred, gt, beta=None, ltype="l1"):
+def pixel_loss(pred, gt, beta=None, ltype="l1", beta_ltype="l1", detach=False):
     loss = loss_dict[ltype](pred, gt).view(3, -1)
     if beta is not None:
-        beta = beta.view(1, -1)
+        assert torch.all(beta > 0)
         loss = loss.mean(dim=0)
-        loss = loss + 0.5 * loss.detach() / (beta[0] ** 2) + (3 + torch.log(beta[0]))
-    return loss, loss.mean()
+        beta = beta.flatten()
+        if detach:
+            loss = loss + loss.detach() / beta_dict[beta_ltype](beta) + beta_reg_dict[beta_ltype](beta)
+        else:
+            loss = loss / beta_dict[beta_ltype](beta) + beta_reg_dict[beta_ltype](beta)
+    return loss.mean()
 
 def gaussian(window_size, sigma):
     gauss = torch.Tensor([math.exp(-(x - window_size // 2) ** 2 / float(2 * sigma ** 2)) for x in range(window_size)])

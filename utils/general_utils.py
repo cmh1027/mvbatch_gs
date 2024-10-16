@@ -14,6 +14,7 @@ import sys
 from datetime import datetime
 import numpy as np
 import random
+import matplotlib.pyplot as plt
 
 def inverse_sigmoid(x):
     return torch.log(x/(1-x))
@@ -135,3 +136,51 @@ def safe_state(silent):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+def draw_two_graphs(k, v, k_label, v_label):
+    k, v = k.squeeze(), v.squeeze()
+    key_val, key_idx = k.sort()
+    x = np.arange(len(key_idx))
+    k_val = key_val.cpu().numpy()
+    v_val = v[key_idx].cpu().numpy()
+
+    fig, axs = plt.subplots(1, 3, figsize=(10, 4))
+
+    axs[0].plot(x, k_val)
+    axs[0].set_xticks([])
+    axs[0].set_ylabel(k_label)
+    axs[1].plot(x, v_val)
+    axs[1].set_xticks([])
+    axs[1].set_ylabel(v_label)
+    axs[2].plot(x, k_val*v_val)
+    axs[2].set_xticks([])
+    axs[2].set_ylabel(f"{k_label} * {v_label}")
+
+    plt.tight_layout()
+    fig.canvas.draw()  
+    image_array = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+    image_array = image_array.reshape(fig.canvas.get_width_height()[::-1] + (3,))  
+
+    plt.close(fig)
+    
+    return image_array.transpose(2,0,1)
+
+def draw_graph(k, k_label):
+    k = k.squeeze()
+    key_val, key_idx = k.sort()
+    x = np.arange(len(key_idx))
+    k_val = key_val.cpu().numpy()
+
+    fig, axs = plt.subplots(1, 1, figsize=(10, 4))
+
+    axs[0].plot(x, k_val)
+    axs[0].set_xticks([])
+    axs[0].set_ylabel(k_label)
+
+    plt.tight_layout()
+    fig.canvas.draw()  
+    image_array = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+    image_array = image_array.reshape(fig.canvas.get_width_height()[::-1] + (3,))  
+
+    plt.close(fig)
+    
+    return image_array.transpose(2,0,1)

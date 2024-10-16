@@ -109,13 +109,15 @@ class Scene:
 
         t_coef, r_coef = args.t_coef / (args.t_coef + args.r_coef), args.r_coef / (args.t_coef + args.r_coef)
         TR_distance = t_coef * T_distance + r_coef * R_distance
-        self.TR_max_prob = TR_distance.clone()
+        self.TR_max_prob = TR_distance.clone().cuda()
         self.TR_max_prob.fill_diagonal_(0.)
         self.TR_max_prob = self.TR_max_prob / self.TR_max_prob.sum(dim=1, keepdim=True)
 
-        self.TR_min_prob = 1 / TR_distance
+        self.TR_min_prob = (1 / TR_distance).cuda()
         self.TR_min_prob.fill_diagonal_(0.)
         self.TR_min_prob = self.TR_min_prob / self.TR_min_prob.sum(dim=1, keepdim=True)
+
+        self.sampled_count = torch.ones(len(scene_info.train_cameras), device=torch.device('cuda'))
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
@@ -129,7 +131,7 @@ class Scene:
 
     def sample_cameras(self, idx, N=2, strategy="min"):
         if strategy == "min":
-            indices = self.TR_min_prob[idx].multinomial(num_samples=N-1, replacement=False)
+            indices = self.TR_min_prob[idx].multinomial(num_samples=N-1)
         elif strategy == "max":
             indices = []
             distance_vector = self.TR_max_prob[idx].clone()
@@ -138,12 +140,17 @@ class Scene:
                 indices += [index.item()]
                 distance_vector = torch.minimum(distance_vector, self.TR_max_prob[index])
                 distance_vector = distance_vector / distance_vector.sum()
-            indices = torch.tensor(indices)
+            indices = torch.tensor(indices, device=torch.device('cuda'))
         elif strategy == "random":
-            indices = torch.randperm(self.TR_max_prob.shape[0])
+            # sampled_count = self.sampled_count.clone()
+            # sampled_count[idx] = 0.
+            # sampled_count = sampled_count / sampled_count.sum()
+            # indices = sampled_count.multinomial(num_samples=N-1)
+            # self.sampled_count[indices] += 1
+            indices = torch.randperm(self.TR_max_prob.shape[0], device=torch.device('cuda'))
             indices = indices[indices != idx][:N-1]
         else:
             raise NotImplementedError
-        selected = torch.cat([torch.tensor([idx]), indices])
+        selected = torch.cat([torch.tensor([idx], device=torch.device('cuda')), indices])
         return selected
     
