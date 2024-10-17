@@ -105,7 +105,7 @@ __global__ void duplicateWithKeys(
 	if (idx >= BR)
 		return;
 	auto point_idx = point_index[idx];
-	auto batch_idx = point_batch_index[idx];
+	auto batch_idx = (uint64_t)point_batch_index[idx];
 	radii += P * batch_idx;
 	// Generate no key/value pair for invisible Gaussians
 	if (radii[point_idx] > 0)
@@ -116,7 +116,7 @@ __global__ void duplicateWithKeys(
 		getRect(points_xy[idx], radii[point_idx], rect_min, rect_max, grid);
 
 		// For each tile that the bounding rect overlaps, emit a 
-		// key/value pair. The key is |  tile ID  |      depth      |,
+		// key/value pair. The key is |  tile ID(2)  |  batch ID(2)   |  depth(4)  |,
 		// and the value is the ID of the Gaussian. Sorting the values 
 		// with this key yields Gaussian IDs in a list, such that they
 		// are first sorted by tile and then by depth. 
@@ -126,8 +126,10 @@ __global__ void duplicateWithKeys(
 			for (int x = rect_min.x; x < rect_max.x; x++)
 			{
 				uint64_t key = y * grid.x + x;
-				key <<= 32;
-				key |= *((uint32_t*)&depths[idx]);
+				key <<= 48;
+				key |= (batch_idx << 32) & BATCH_MASK;
+				key |= *((uint32_t*)&depths[idx]) & DEPTH_MASK;
+
 				gaussian_keys_unsorted[off] = key;
 				gaussian_values_unsorted[off] = idx;
 				off++;
@@ -139,7 +141,13 @@ __global__ void duplicateWithKeys(
 // Check keys to see if it is at the start/end of one tile's range in 
 // the full sorted list. If yes, write start/end of this tile. 
 // Run once per instanced (duplicated) Gaussian ID.
-__global__ void identifyTileRanges(int L, uint64_t* point_list_keys, uint2* ranges)
+/*
+e.g batch=4
+(A, B) => range info for tile A batch B
+ranges = [(0, 0), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1), (1, 2) ...]
+
+*/
+__global__ void identifyTileRanges(int L, int B, uint64_t* point_list_keys, uint2* ranges)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= L)
@@ -147,20 +155,25 @@ __global__ void identifyTileRanges(int L, uint64_t* point_list_keys, uint2* rang
 
 	// Read tile ID from key. Update start/end of tile range if at limit.
 	uint64_t key = point_list_keys[idx];
-	uint32_t currtile = key >> 32;
+	uint32_t currtile = (key & TILE_MASK) >> 48;
+	uint32_t currbatch = (key & BATCH_MASK) >> 32;
+	uint32_t curridx = currtile * B + currbatch;
 	if (idx == 0)
-		ranges[currtile].x = 0;
+		ranges[curridx].x = 0;
 	else
 	{
-		uint32_t prevtile = point_list_keys[idx - 1] >> 32;
-		if (currtile != prevtile)
+		uint32_t prevtile = (point_list_keys[idx - 1] & TILE_MASK) >> 48;
+		uint32_t prevbatch = (point_list_keys[idx - 1] & BATCH_MASK) >> 32;
+		uint32_t previdx = prevtile * B + prevbatch;
+		if (curridx != previdx)
 		{
-			ranges[prevtile].y = idx;
-			ranges[currtile].x = idx;
+			ranges[previdx].y = idx;
+			ranges[curridx].x = idx;
 		}
 	}
 	if (idx == L - 1)
-		ranges[currtile].y = L;
+		ranges[curridx].y = L;
+	
 }
 
 // Mark Gaussians as visible/invisible, based on view frustum testing
@@ -267,7 +280,8 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 	const float focal_x = width / (2.0f * tan_fovx);
 	const dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
 	const dim3 block(BLOCK_X, BLOCK_Y, 1);
-	const dim3 render_block(BLOCK_X * BLOCK_Y, 1, 1);
+	const dim3 render_tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, B);
+	const dim3 render_block(BLOCK_X * BLOCK_Y / B, 1, 1);
 	assert(BLOCK_X*BLOCK_Y % B == 0);
 
 	size_t cache_chunk_size = required<CacheState>(P, B);
@@ -369,22 +383,23 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		binningState.sorting_size,
 		binningState.point_list_keys_unsorted, binningState.point_list_keys,
 		binningState.point_list_unsorted, binningState.point_list,
-		num_rendered, 0, 32 + bit), debug)
+		num_rendered, 0, 48 + bit), debug)
 
 	CHECK_CUDA(cudaMemset(imgState.ranges, 0, tile_grid.x * tile_grid.y * sizeof(uint2)), debug);
 
 	// Identify start and end of per-tile workloads in sorted list
 	if (num_rendered > 0){
 		identifyTileRanges << <(num_rendered + 255) / 256, 256 >> > (
-			num_rendered,
+			num_rendered, B,
 			binningState.point_list_keys,
 			imgState.ranges);
 	}
-	CHECK_CUDA(, debug)
 
+	CHECK_CUDA(, debug)
+	ERROR_CHECK
 	// Let each tile blend its range of Gaussians independently in parallel
 	CHECK_CUDA(FORWARD::render(
-		tile_grid, render_block,
+		render_tile_grid, render_block,
 		imgState.ranges,
 		binningState.point_list,
 		width, height, B,
@@ -457,12 +472,13 @@ void CudaRasterizer::Rasterizer::backward(
 
 	const dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
 	const dim3 block(BLOCK_X, BLOCK_Y, 1);
-	const dim3 render_block(BLOCK_X * BLOCK_Y, 1, 1);
+	const dim3 render_tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, B);
+	const dim3 render_block(BLOCK_X * BLOCK_Y / B, 1, 1);
 	// Compute loss gradients w.r.t. 2D mean position, conic matrix,
 	// opacity and RGB of Gaussians from per-pixel loss gradients.
 	// If we were given precomputed colors and not SHs, use them.
 	CHECK_CUDA(BACKWARD::render(
-		tile_grid, render_block,
+		render_tile_grid, render_block,
 		imgState.ranges,
 		binningState.point_list,
 		width, height, B, BR,

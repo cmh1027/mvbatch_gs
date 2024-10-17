@@ -321,7 +321,7 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 // Main rasterization method. Collaboratively works on one tile per
 // block, each thread treats one pixel. Alternates between fetching 
 // and rasterizing data.
-template <uint32_t CHANNELS>
+template <uint32_t CHANNELS, int BATCH>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 renderCUDA(
 	const uint2* __restrict__ ranges,
@@ -342,17 +342,19 @@ renderCUDA(
 	const int* __restrict__ point_batch_index)
 {
 	// Identify current tile and associated min/max pixel range.
+	const int THREAD_SIZE = BLOCK_SIZE / BATCH;
+
 	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
 	auto block = cg::this_thread_block();
 	uint block_x = block.group_index().x;
 	uint block_y = block.group_index().y;
-	auto block_id = block_y * horizontal_blocks + block_x;
+	uint block_id = block_y * horizontal_blocks + block_x;
 
 	auto PH = (H + BLOCK_Y - 1) / BLOCK_Y;
 	auto PW = (W + BLOCK_X - 1) / BLOCK_X;
 
-	auto pix_in_block_id = block_id * BLOCK_SIZE + block.thread_index().x;
-	auto batch_idx = block.thread_index().x / (BLOCK_SIZE / B);
+	auto batch_idx = block.group_index().z;
+	auto pix_in_block_id = block_id * BLOCK_SIZE + THREAD_SIZE * batch_idx + block.thread_index().x;
 
 	bool mask_inside = pix_in_block_id < PH * PW * BLOCK_SIZE;
 	int pix_in_block;
@@ -376,14 +378,15 @@ renderCUDA(
 	bool done = !inside;
 
 	// Load start/end range of IDs to process in bit sorted list.
-	uint2 range = ranges[block_id];
-	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
+	uint range_id = block_id * B + batch_idx;
+	uint2 range = ranges[range_id];
+	const int rounds = ((range.y - range.x + THREAD_SIZE - 1) / THREAD_SIZE);
 	int toDo = range.y - range.x;
 	
 	// Allocate storage for batches of collectively fetched data.
-	__shared__ int collected_id[BLOCK_SIZE];
-	__shared__ float2 collected_xy[BLOCK_SIZE];
-	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
+	__shared__ int collected_id[BLOCK_SIZE / BATCH];
+	__shared__ float2 collected_xy[BLOCK_SIZE / BATCH];
+	__shared__ float4 collected_conic_opacity[BLOCK_SIZE / BATCH];
 
 	// Initialize helper variables
 	float T = 1.0f;
@@ -394,15 +397,15 @@ renderCUDA(
 	float D = { 0 };
 
 	// Iterate over batches until all done or range is complete
-	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
+	for (int i = 0; i < rounds; i++, toDo -= THREAD_SIZE)
 	{
 		// End if entire block votes that it is done rasterizing
 		int num_done = __syncthreads_count(done);
-		if (num_done == BLOCK_SIZE)
+		if (num_done == THREAD_SIZE)
 			break;
 		
 		// Collectively fetch per-Gaussian data from global to shared
-		int progress = i * BLOCK_SIZE + block.thread_rank();
+		int progress = i * THREAD_SIZE + block.thread_rank();
 		if (range.x + progress < range.y)
 		{
 			int coll_id = point_list[range.x + progress];
@@ -413,7 +416,7 @@ renderCUDA(
 		block.sync();
 		
 		// Iterate over current batch
-		for (int j = 0; !done && j < min(BLOCK_SIZE, toDo); j++)
+		for (int j = 0; !done && j < min(THREAD_SIZE, toDo); j++)
 		{
 			// Keep track of current position in range
 			contributor++;
@@ -489,24 +492,32 @@ void FORWARD::render(
 	const int* point_batch_index
 )
 {
-	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
-		ranges,
-		point_list,
-		W, H, B,
-		means2D,
-		colors,
-		betas,
-		depths,
-		conic_opacity,
-		final_T,
-		n_contrib,
-		bg_color,
-		out_color,
-		out_beta,
-		out_depth,
-		mask,
-		point_batch_index
-	);
+	switch(B){
+		case 1:
+			renderCUDA<NUM_CHANNELS, 1> << <grid, block >> > (
+				ranges, point_list, W, H, B, means2D, colors, betas, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_beta, out_depth, mask, point_batch_index
+			);
+			break;
+		case 2:
+			renderCUDA<NUM_CHANNELS, 2> << <grid, block >> > (
+				ranges, point_list, W, H, B, means2D, colors, betas, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_beta, out_depth, mask, point_batch_index
+			);
+			break;
+		case 4:
+			renderCUDA<NUM_CHANNELS, 4> << <grid, block >> > (
+				ranges, point_list, W, H, B, means2D, colors, betas, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_beta, out_depth, mask, point_batch_index
+			);
+			break;
+		case 8:
+			renderCUDA<NUM_CHANNELS, 8> << <grid, block >> > (
+				ranges, point_list, W, H, B, means2D, colors, betas, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_beta, out_depth, mask, point_batch_index
+			);
+			break;
+		default:
+			printf("Batch size %d is not supported", B);
+			exit(0);
+	}
+
 	ERROR_CHECK
 }
 

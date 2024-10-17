@@ -17,7 +17,11 @@
 #define BLOCK_Y 32
 #endif
 
-#define PRINT_CUDA_ARRAY(N, type, src) \
+#define TILE_MASK  0xffff000000000000
+#define BATCH_MASK 0x0000ffff00000000
+#define DEPTH_MASK 0x00000000ffffffff
+
+#define PRINT_CUDA_ARRAY(N, src) \
 	{ \
 		int temp[N]; \
 		cudaMemcpy(temp, src, sizeof(type) * N, cudaMemcpyDeviceToHost); \
@@ -29,14 +33,23 @@
 
 
 
-#define PRINT_CUDA_ARRAY2(N, type, src1, src2) \
+#define PRINT_CUDA_ARRAY2(N, src1, src2) \
 	{ \
 		int temp1[N]; \
 		int temp2[N]; \
-		cudaMemcpy(temp1, src1, sizeof(type) * N, cudaMemcpyDeviceToHost); \
-		cudaMemcpy(temp2, src2, sizeof(type) * N, cudaMemcpyDeviceToHost); \
+		cudaMemcpy(temp1, src1, sizeof(int) * N, cudaMemcpyDeviceToHost); \
+		cudaMemcpy(temp2, src2, sizeof(int) * N, cudaMemcpyDeviceToHost); \
 		for(int i=0; i<N; ++i){ \
 			printf("%d %d\n", temp1[i], temp2[i]); \
+		} \
+	}
+
+#define PRINT_CUDA_PAIR_ARRAY(N, src) \
+	{ \
+		uint2 temp[N]; \
+		cudaMemcpy(temp, src, sizeof(uint2) * N, cudaMemcpyDeviceToHost); \
+		for(int i=0; i<N; ++i){ \
+			printf("%d %d\n", temp[i].x, temp[i].y); \
 		} \
 	}
 

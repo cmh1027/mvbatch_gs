@@ -144,7 +144,6 @@ def training(dataset, opt, pipe, args):
 		bg = torch.rand((3), device="cuda") if opt.random_background else background
 
 		pmask = torch.sort(torch.rand(partial_height * partial_width, opt.mask_height * opt.mask_width, device=torch.device('cuda'))).indices.to(torch.int32)
-		pmask = pmask.sort(dim=-1).values
 		kwargs = {
 			"mask" : pmask,
 			"normalize_grad2D" : opt.normalize_grad2D
@@ -160,8 +159,6 @@ def training(dataset, opt, pipe, args):
 			render_pkg["log_buffer"]
 		)
 		beta = render_pkg["beta"] + opt.beta_min if opt.use_beta else None
-		save_image(image, "image.png")
-		breakpoint()
 
 		visibility_count = visibility_count + visibility_filter.to(visibility_count.dtype)
 		batch_vs += [viewspace_point_tensor]
