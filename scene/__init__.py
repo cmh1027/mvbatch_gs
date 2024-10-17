@@ -117,8 +117,6 @@ class Scene:
         self.TR_min_prob.fill_diagonal_(0.)
         self.TR_min_prob = self.TR_min_prob / self.TR_min_prob.sum(dim=1, keepdim=True)
 
-        self.sampled_count = torch.ones(len(scene_info.train_cameras), device=torch.device('cuda'))
-
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
         self.gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))
@@ -142,11 +140,6 @@ class Scene:
                 distance_vector = distance_vector / distance_vector.sum()
             indices = torch.tensor(indices, device=torch.device('cuda'))
         elif strategy == "random":
-            # sampled_count = self.sampled_count.clone()
-            # sampled_count[idx] = 0.
-            # sampled_count = sampled_count / sampled_count.sum()
-            # indices = sampled_count.multinomial(num_samples=N-1)
-            # self.sampled_count[indices] += 1
             indices = torch.randperm(self.TR_max_prob.shape[0], device=torch.device('cuda'))
             indices = indices[indices != idx][:N-1]
         else:

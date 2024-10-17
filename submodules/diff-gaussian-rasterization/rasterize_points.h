@@ -76,3 +76,8 @@ std::tuple<torch::Tensor, torch::Tensor> ComputeRelocationCUDA(
 		torch::Tensor& N,
 		torch::Tensor& binoms,
 		const int n_max);
+
+torch::Tensor MakeCategoryMaskCUDA(
+	torch::Tensor& mask,
+	int H, int W, int B
+);

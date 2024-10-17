@@ -449,7 +449,7 @@ __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 renderCUDA(
 	const uint2* __restrict__ ranges,
 	const uint32_t* __restrict__ point_list,
-	int W, int H, int BR,
+	int W, int H, int B, int BR,
 	const float* __restrict__ bg_color,
 	const float2* __restrict__ points_xy_image,
 	const float4* __restrict__ conic_opacity,
@@ -471,31 +471,41 @@ renderCUDA(
 	const int* __restrict__ point_index,
 	const int* __restrict__ point_batch_index)
 {
-
+	// Identify current tile and associated min/max pixel range.
+	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
 	auto block = cg::this_thread_block();
 	uint block_x = block.group_index().x;
 	uint block_y = block.group_index().y;
-	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
-	uint32_t vertial_blocks = (H + BLOCK_Y - 1) / BLOCK_Y;
+	auto block_id = block_y * horizontal_blocks + block_x;
 
+	auto PH = (H + BLOCK_Y - 1) / BLOCK_Y;
+	auto PW = (W + BLOCK_X - 1) / BLOCK_X;
 
-	const uint2 pix_min = { block_x * BLOCK_X, block_y * BLOCK_Y };
-	const uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
-	const uint32_t pix_id = W * pix.y + pix.x;
-	const float2 pixf = { (float)pix.x, (float)pix.y };
+	auto pix_in_block_id = block_id * BLOCK_SIZE + block.thread_index().x;
+	auto batch_idx = block.thread_index().x / (BLOCK_SIZE / B);
+
+	bool mask_inside = pix_in_block_id < PH * PW * BLOCK_SIZE;
+	int pix_in_block;
+	if(mask_inside){
+		pix_in_block = mask[pix_in_block_id];
+	}
+	else{
+		pix_in_block = 0;
+	}
+	auto pix_x_in_block = pix_in_block % BLOCK_X;
+	auto pix_y_in_block = pix_in_block / BLOCK_X;
+
+	uint2 pix_min = { block_x * BLOCK_X, block_y * BLOCK_Y };
+	uint2 pix = { pix_min.x + pix_x_in_block, pix_min.y + pix_y_in_block };
+	uint32_t pix_id = W * pix.y + pix.x;
+	float2 pixf = { (float)pix.x, (float)pix.y };
 
 	// Check if this thread is associated with a valid pixel or outside.
 	bool inside = pix.x < W && pix.y < H;
-	int tile_batch_idx = -1;
-	if(inside){
-		tile_batch_idx = mask[block_y * horizontal_blocks + block_x];
-	}
-	
-	const uint2 range = ranges[block_y * horizontal_blocks + block_x];
-
-	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
 	// Done threads can help with fetching, but don't rasterize
 	bool done = !inside;
+	uint2 range = ranges[block_id];
+	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
 	int toDo = range.y - range.x;
 
 	__shared__ int collected_id[BLOCK_SIZE];
@@ -566,7 +576,7 @@ renderCUDA(
 			if (contributor >= last_contributor)
 				continue;
 			assert(collected_id[j] < BR);
-			if(point_batch_index[collected_id[j]] != tile_batch_idx) continue;
+			if(point_batch_index[collected_id[j]] != batch_idx) continue;
 			// Compute blending values, as before.
 			const float2 xy = collected_xy[j];
 			const float2 d = { xy.x - pixf.x, xy.y - pixf.y };
@@ -736,7 +746,7 @@ void BACKWARD::render(
 	const dim3 grid, const dim3 block,
 	const uint2* ranges,
 	const uint32_t* point_list,
-	int W, int H, int BR,
+	int W, int H, int B, int BR,
 	const float* bg_color,
 	const float2* means2D,
 	const float4* conic_opacity,
@@ -761,7 +771,7 @@ void BACKWARD::render(
 	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
 		ranges,
 		point_list,
-		W, H, BR,
+		W, H, B, BR,
 		bg_color,
 		means2D,
 		conic_opacity,

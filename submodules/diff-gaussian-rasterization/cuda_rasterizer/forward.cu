@@ -206,16 +206,10 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
 	uint2 rect_min, rect_max;
 	getRect(point_image, my_radius, rect_min, rect_max, grid);
-	uint tiles = 0;
-	for (int y = rect_min.y; y < rect_max.y; y++)
-	{
-		for (int x = rect_min.x; x < rect_max.x; x++)
-		{
-			if(mask[y * horizontal_blocks + x] == batch_idx) ++tiles;
-		}
-	}
+	auto tiles = (rect_max.x - rect_min.x) * (rect_max.y - rect_min.y);
 	if (tiles == 0)
 		return;
+
 	atomicAdd(batch_num_rendered + idx, 1);
 	batch_rendered_check[idx * B + batch_idx] = true;
 }
@@ -245,7 +239,6 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
-	uint32_t* tiles_touched_nomask,
 	const int* mask,
 	const int* point_index,
 	const int* point_batch_index
@@ -306,15 +299,7 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
 	uint2 rect_min, rect_max;
 	getRect(point_image, my_radius, rect_min, rect_max, grid);
-	uint tiles = 0, tiles_nomask = 0;
-	for (int y = rect_min.y; y < rect_max.y; y++)
-	{
-		for (int x = rect_min.x; x < rect_max.x; x++)
-		{
-			if(mask[y * horizontal_blocks + x] == batch_idx) ++tiles;
-			++tiles_nomask;
-		}
-	}
+	auto tiles = (rect_max.x - rect_min.x) * (rect_max.y - rect_min.y);
 	if (tiles == 0)
 		return;
 
@@ -331,7 +316,6 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	// Inverse 2D covariance and opacity neatly pack into one float4
 	conic_opacity[idx] = { conic.x, conic.y, conic.z, opacities[point_idx] };
 	tiles_touched[idx] = tiles;
-	tiles_touched_nomask[idx] = tiles_nomask;
 }
 
 // Main rasterization method. Collaboratively works on one tile per
@@ -342,7 +326,7 @@ __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 renderCUDA(
 	const uint2* __restrict__ ranges,
 	const uint32_t* __restrict__ point_list,
-	int W, int H,
+	int W, int H, int B,
 	const float2* __restrict__ points_xy_image,
 	const float* __restrict__ features,
 	const float* __restrict__ betas,
@@ -354,35 +338,48 @@ renderCUDA(
 	float* __restrict__ out_color,
 	float* __restrict__ out_beta,
 	float* __restrict__ out_depth,
-	const int* __restrict__ mask,
+	const int* __restrict__ mask, // (PW*PH, BLOCK_X*BLOCK_Y)
 	const int* __restrict__ point_batch_index)
 {
 	// Identify current tile and associated min/max pixel range.
+	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
 	auto block = cg::this_thread_block();
 	uint block_x = block.group_index().x;
 	uint block_y = block.group_index().y;
-	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
-	uint32_t vertical_blocks = (H + BLOCK_Y - 1) / BLOCK_Y;
+	auto block_id = block_y * horizontal_blocks + block_x;
+
+	auto PH = (H + BLOCK_Y - 1) / BLOCK_Y;
+	auto PW = (W + BLOCK_X - 1) / BLOCK_X;
+
+	auto pix_in_block_id = block_id * BLOCK_SIZE + block.thread_index().x;
+	auto batch_idx = block.thread_index().x / (BLOCK_SIZE / B);
+
+	bool mask_inside = pix_in_block_id < PH * PW * BLOCK_SIZE;
+	int pix_in_block;
+	if(mask_inside){
+		pix_in_block = mask[pix_in_block_id];
+	}
+	else{
+		pix_in_block = 0;
+	}
+	auto pix_x_in_block = pix_in_block % BLOCK_X;
+	auto pix_y_in_block = pix_in_block / BLOCK_X;
 
 	uint2 pix_min = { block_x * BLOCK_X, block_y * BLOCK_Y };
-	uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
+	uint2 pix = { pix_min.x + pix_x_in_block, pix_min.y + pix_y_in_block };
 	uint32_t pix_id = W * pix.y + pix.x;
 	float2 pixf = { (float)pix.x, (float)pix.y };
 
 	// Check if this thread is associated with a valid pixel or outside.
 	bool inside = pix.x < W && pix.y < H;
-	int tile_batch_idx = -1;
-	if(inside){
-		tile_batch_idx = mask[block_y * horizontal_blocks + block_x];
-	}
 	// Done threads can help with fetching, but don't rasterize
 	bool done = !inside;
 
 	// Load start/end range of IDs to process in bit sorted list.
-	uint2 range = ranges[block_y * horizontal_blocks + block_x];
+	uint2 range = ranges[block_id];
 	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
 	int toDo = range.y - range.x;
-
+	
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
@@ -403,7 +400,7 @@ renderCUDA(
 		int num_done = __syncthreads_count(done);
 		if (num_done == BLOCK_SIZE)
 			break;
-
+		
 		// Collectively fetch per-Gaussian data from global to shared
 		int progress = i * BLOCK_SIZE + block.thread_rank();
 		if (range.x + progress < range.y)
@@ -414,14 +411,14 @@ renderCUDA(
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
 		}
 		block.sync();
-
+		
 		// Iterate over current batch
 		for (int j = 0; !done && j < min(BLOCK_SIZE, toDo); j++)
 		{
 			// Keep track of current position in range
 			contributor++;
 			// ignore if batch_idx of the point is not matched with the value in the mask 
-			if(point_batch_index[collected_id[j]] != tile_batch_idx) continue;
+			if(point_batch_index[collected_id[j]] != batch_idx) continue;
 
 			// Resample using conic matrix (cf. "Surface 
 			// Splatting" by Zwicker et al., 2001)
@@ -459,7 +456,6 @@ renderCUDA(
 			last_contributor = contributor;
 		}
 	}
-
 	// All threads that treat valid pixel write out their final
 	// rendering data to the frame and auxiliary buffers.
 	if (inside)
@@ -477,7 +473,7 @@ void FORWARD::render(
 	const dim3 grid, dim3 block,
 	const uint2* ranges,
 	const uint32_t* point_list,
-	int W, int H,
+	int W, int H, int B,
 	const float2* means2D,
 	const float* colors,
 	const float* betas,
@@ -496,7 +492,7 @@ void FORWARD::render(
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
 		point_list,
-		W, H,
+		W, H, B,
 		means2D,
 		colors,
 		betas,
@@ -538,7 +534,6 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
-	uint32_t* tiles_touched_nomask,
 	const int* mask,
 	const int* point_index,
 	const int* point_batch_index
@@ -569,7 +564,6 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 		conic_opacity,
 		grid,
 		tiles_touched,
-		tiles_touched_nomask,
 		mask,
 		point_index,
 		point_batch_index

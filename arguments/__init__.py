@@ -132,10 +132,9 @@ class OptimizationParams(ParamGroup):
         self.batch_until = -1
         self.batch_partition = False
         self.batch_partition_denom = -1
-        self.mask_height = 16
-        self.mask_width = 16
+        self.mask_height = 32
+        self.mask_width = 32
         self.count_tile_sample = False
-        self.sample_decrease = False
 
         self.single_partial_rays = False
         self.single_partial_rays_denom = 1

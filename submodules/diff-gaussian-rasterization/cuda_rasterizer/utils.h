@@ -15,7 +15,14 @@ namespace UTILS
         float* binoms,
         int n_max,
         float* opacity_new,
-        float* scale_new);
+        float* scale_new
+    );
+
+    void MakeCategoryMask(
+        const int* mask,
+        int H, int W, int B,
+        int* output_mask
+    );
 }
 
 #endif

@@ -58,19 +58,22 @@ RasterizeGaussiansCUDA(
 	if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
 		AT_ERROR("means3D must have dimensions (num_points, 3)");
 	}
-
+	auto PH = (image_height + BLOCK_Y - 1) / BLOCK_Y;
+	auto PW = (image_width + BLOCK_X - 1) / BLOCK_X;
 	if(mask.contiguous().data<int>() == nullptr){
-		mask = torch::full({(image_height + BLOCK_Y) / BLOCK_Y, (image_width + BLOCK_X) / BLOCK_X}, 0, means3D.options().dtype(torch::kInt32));
+		mask = torch::arange(BLOCK_X*BLOCK_Y, means3D.options().dtype(torch::kInt32)).unsqueeze(0).repeat({PH*PW, 1}); // (PH*PW, BLOCK_X * BLOCK_Y)
 	}
-	else{
-		assert(mask.size(0) == (image_height + BLOCK_Y - 1) / BLOCK_Y);
-		assert(mask.size(1) == (image_width + BLOCK_X - 1) / BLOCK_X);
-	}
+	assert(mask.size(0) == PH*PW);
+	assert(mask.size(1) == BLOCK_X * BLOCK_Y);
+	assert(BLOCK_X == BLOCK_Y);
 
 	const int P = means3D.size(0);
 	const int H = image_height;
 	const int W = image_width;
 	const int B = viewmatrix.size(0);
+
+	assert(BLOCK_X * BLOCK_Y % B == 0);
+
 	auto int_opts = means3D.options().dtype(torch::kInt32);
 	auto float_opts = means3D.options().dtype(torch::kFloat32);
 
@@ -282,4 +285,23 @@ std::tuple<torch::Tensor, torch::Tensor> ComputeRelocationCUDA(
 
 	return std::make_tuple(final_opacity, final_scale);
 
+}
+
+torch::Tensor MakeCategoryMaskCUDA(
+	torch::Tensor& mask,
+	int H, int W, int B
+)
+{
+	auto float_opts = mask.options().dtype(torch::kInt32);
+	torch::Tensor category_mask = torch::full({H, W}, 0.0, float_opts);
+
+
+	UTILS::MakeCategoryMask(
+		mask.contiguous().data<int>(),
+		H, W, B,
+		category_mask.contiguous().data<int>()
+	);
+
+
+	return category_mask;
 }

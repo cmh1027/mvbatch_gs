@@ -15,9 +15,8 @@ import torch
 import torch.nn.functional as F
 from random import randint
 from utils.loss_utils import collage_pixel_loss, pixel_loss, ssim, get_lambda_dssim
-from fused_ssim import fused_ssim
 from lpipsPyTorch import lpips
-from gaussian_renderer import render, network_gui
+from gaussian_renderer import render
 import sys
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state, draw_graph, draw_two_graphs
@@ -26,7 +25,6 @@ from utils.image_utils import psnr, apply_depth_colormap, pcoef_freq
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from scene.gaussian_model import build_scaling_rotation
-import random
 from torchvision.utils import save_image
 try:
 	from torch.utils.tensorboard import SummaryWriter
@@ -37,7 +35,7 @@ from render import render_sets
 from metrics import evaluate
 from datetime import timedelta
 import time
-
+from diff_gaussian_rasterization import make_category_mask
 
 def training(dataset, opt, pipe, args):
 	saving_iterations = args.save_iterations
@@ -107,19 +105,8 @@ def training(dataset, opt, pipe, args):
 
 	start_time = time.time()
 
-	# sampled_count = torch.rand((len(scene.getTrainCameras()), partial_height*partial_width), device=torch.device('cuda')) * 1e-5
-	prob = torch.ones(opt.batch_size, device=torch.device('cuda'))
-	prob_dec = 1 / (torch.arange(opt.batch_size, 0, -1, device=torch.device('cuda')) * opt.iterations / opt.batch_size)
-
-
 	for iteration in range(first_iter, opt.iterations + 1): 
 		lambda_dssim = get_lambda_dssim(opt, iteration)
-		if len(prob) > 1:
-			prob = prob - prob_dec
-			if opt.sample_decrease and prob[-1] <= 0:
-				print(f"BATCH SIZE {opt.batch_size} => {opt.batch_size - 1}")
-				opt.batch_size -= 1
-				prob, prob_dec = prob[:-1], prob_dec[:-1]
 
 		gt_images = []
 		if iteration == forced_exit:
@@ -156,21 +143,8 @@ def training(dataset, opt, pipe, args):
 
 		bg = torch.rand((3), device="cuda") if opt.random_background else background
 
-		if len(cams) > 1:
-			# if opt.count_tile_sample:
-			# 	prob = sampled_count[cam_idxs] # (batch, PW*PH)
-			# 	prob = prob / prob.sum(dim=0, keepdim=True)
-			# 	pmask = torch.multinomial(prob.T, 1).squeeze()
-			# 	sampled_count.scatter_add_(0, pmask[None], torch.ones_like(sampled_count[0:1]))
-			# 	pmask = pmask.to(torch.int32).reshape(partial_height, partial_width)
-			if opt.sample_decrease:
-				prob_norm = prob / prob.sum()
-				pmask = torch.multinomial(prob_norm, partial_height*partial_width, replacement=True).reshape(partial_height, partial_width).to(torch.int32)
-			else:
-				pmask = torch.randint(0, len(cams), (partial_height, partial_width), dtype=torch.int32, device=torch.device('cuda'))
-		else:
-			pmask = None
-
+		pmask = torch.sort(torch.rand(partial_height * partial_width, opt.mask_height * opt.mask_width, device=torch.device('cuda'))).indices.to(torch.int32)
+		pmask = pmask.sort(dim=-1).values
 		kwargs = {
 			"mask" : pmask,
 			"normalize_grad2D" : opt.normalize_grad2D
@@ -186,6 +160,8 @@ def training(dataset, opt, pipe, args):
 			render_pkg["log_buffer"]
 		)
 		beta = render_pkg["beta"] + opt.beta_min if opt.use_beta else None
+		save_image(image, "image.png")
+		breakpoint()
 
 		visibility_count = visibility_count + visibility_filter.to(visibility_count.dtype)
 		batch_vs += [viewspace_point_tensor]
@@ -193,14 +169,10 @@ def training(dataset, opt, pipe, args):
 
 		if len(cams) > 1:
 			gt_images = torch.stack([cam.original_image.cuda() for cam in cams])
-			collage_mask = torch.zeros(H, W, device=torch.device('cuda'), dtype=torch.int64)
-			pmask_expand = torch.kron(pmask, torch.ones(opt.mask_height, opt.mask_width, device=torch.device('cuda')))
-			collage_mask[:, :] = pmask_expand[:H, :W]
+			collage_mask = make_category_mask(pmask, H, W, opt.batch_size).to(torch.int64)
 			collage_mask = collage_mask.unsqueeze(0).repeat(3,1,1)
 			collage_gt = torch.gather(gt_images, 0, collage_mask.unsqueeze(0)).squeeze(0)
-
-			Ll = collage_pixel_loss(image, collage_gt, collage_mask, beta=beta, ltype=opt.loss_type, beta_ltype=opt.beta_loss_type, detach=opt.beta_detach)
-
+			Ll = pixel_loss(image, collage_gt, beta=beta, ltype=opt.loss_type, beta_ltype=opt.beta_loss_type, detach=opt.beta_detach)
 			loss = (1.0 - lambda_dssim) * Ll
 			if lambda_dssim > 0:
 				for i in range(len(cams)):

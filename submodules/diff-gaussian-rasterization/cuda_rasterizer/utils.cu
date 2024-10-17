@@ -1,6 +1,8 @@
 #include "utils.h"
 #include "auxiliary.h"
-
+#include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
+namespace cg = cooperative_groups;
 
 // Equation (9) in "3D Gaussian Splatting as Markov Chain Monte Carlo"
 __global__ void compute_relocation(
@@ -35,6 +37,42 @@ __global__ void compute_relocation(
         scale_new[idx * 3 + i] = coeff * scale_old[idx * 3 + i];
 }
 
+__global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
+make_category_mask(
+    const int* mask, // (PW*PH, BLOCK_X*BLOCK_Y)
+    int H, int W, int B,
+    int* output_mask)
+{
+	// Identify current tile and associated min/max pixel range.
+	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
+	auto block = cg::this_thread_block();
+	uint block_x = block.group_index().x;
+	uint block_y = block.group_index().y;
+	auto block_id = block_y * horizontal_blocks + block_x;
+
+	auto PH = (H + BLOCK_Y - 1) / BLOCK_Y;
+	auto PW = (W + BLOCK_X - 1) / BLOCK_X;
+
+	auto pix_in_block_id = block_id * BLOCK_SIZE + block.thread_index().x;
+	auto batch_idx = block.thread_index().x / (BLOCK_SIZE / B);
+
+	bool mask_inside = pix_in_block_id < PH * PW * BLOCK_SIZE;
+    if(!mask_inside) return;
+
+	int pix_in_block = mask[pix_in_block_id];
+	auto pix_x_in_block = pix_in_block % BLOCK_X;
+	auto pix_y_in_block = pix_in_block / BLOCK_X;
+
+	uint2 pix_min = { block_x * BLOCK_X, block_y * BLOCK_Y };
+	uint2 pix = { pix_min.x + pix_x_in_block, pix_min.y + pix_y_in_block };
+	uint32_t pix_id = W * pix.y + pix.x;
+	float2 pixf = { (float)pix.x, (float)pix.y };
+    bool inside = pix.x < W && pix.y < H;
+    if(!inside) return;
+    output_mask[pix_id] = batch_idx;
+}
+
+
 void UTILS::ComputeRelocation(
     int P,
     float* opacity_old,
@@ -49,4 +87,16 @@ void UTILS::ComputeRelocation(
 	dim3 block(256, 1, 1);
 	dim3 grid(num_blocks, 1, 1);
 	compute_relocation<<<grid, block>>>(P, opacity_old, scale_old, N, binoms, n_max, opacity_new, scale_new);
+}
+
+void UTILS::MakeCategoryMask(
+    const int* mask,
+    int H, int W, int B,
+    int* output_mask
+)
+{
+	dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, 1);
+	dim3 block(BLOCK_X * BLOCK_Y, 1, 1);
+	make_category_mask<<<grid, block>>>(mask, H, W, B, output_mask);
+    ERROR_CHECK
 }
