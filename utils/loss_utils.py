@@ -33,20 +33,6 @@ beta_reg_dict = {
 
 
 
-def collage_pixel_loss(pred, gt, mask, beta=None, ltype="l1", beta_ltype="l1", detach=False):
-    loss = loss_dict[ltype](pred, gt).view(3, -1).mean(dim=0) # (H*W)
-    if beta is not None:
-        assert torch.all(beta > 0)
-        beta = beta.flatten()
-        if detach:
-            loss = loss + loss.detach() / beta_dict[beta_ltype](beta) + beta_reg_dict[beta_ltype](beta)
-        else:
-            loss = loss / beta_dict[beta_ltype](beta) + beta_reg_dict[beta_ltype](beta)
-    mask = mask.view(3, -1)[0]
-    idx_count = mask.bincount().clamp_(min=1)
-    loss_sum = torch.zeros(len(idx_count), device=torch.device('cuda')).scatter_add_(0, mask, loss)
-    return (loss_sum / idx_count).sum()
-
 def pixel_loss(pred, gt, beta=None, ltype="l1", beta_ltype="l1", detach=False):
     loss = loss_dict[ltype](pred, gt).view(3, -1)
     if beta is not None:

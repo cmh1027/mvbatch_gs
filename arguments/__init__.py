@@ -64,6 +64,7 @@ class ModelParams(ParamGroup):
         self.r_coef = 1.0
         self.num_imgs = -1
         self.init_scale = 0.1
+        self.load_iter = False
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -92,7 +93,7 @@ class OptimizationParams(ParamGroup):
         self.beta_lr = 0.0025
         self.percent_dense = 0.01
         self.loss_type = "l1"
-        self.beta_loss_type = "l2"
+        self.beta_loss_type = "l1"
 
         self.lambda_dssim = -1
         self.lambda_dssim_init = 0.2
@@ -134,7 +135,7 @@ class OptimizationParams(ParamGroup):
         self.batch_partition_denom = -1
         self.mask_height = 32
         self.mask_width = 32
-        self.count_tile_sample = False
+        self.grid_size = 1
 
         self.single_partial_rays = False
         self.single_partial_rays_denom = 1
@@ -152,6 +153,7 @@ class OptimizationParams(ParamGroup):
         self.use_beta = False
         self.beta_detach = False
         self.beta_min = 0.1
+        self.grad_sum = False
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

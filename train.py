@@ -14,7 +14,7 @@ import json
 import torch
 import torch.nn.functional as F
 from random import randint
-from utils.loss_utils import collage_pixel_loss, pixel_loss, ssim, get_lambda_dssim
+from utils.loss_utils import pixel_loss, ssim, get_lambda_dssim
 from lpipsPyTorch import lpips
 from gaussian_renderer import render
 import sys
@@ -49,9 +49,9 @@ def training(dataset, opt, pipe, args):
 
 	if opt.gs_type == "original":
 		dataset.init_scale = 1
-		opt.densify_until_iter = 15000
+		# opt.densify_until_iter = 15000
 		if opt.max_points == -1:
-			opt.max_points = 6_000_000
+			opt.max_points = 8_000_000
 		opt.densify_grad_threshold *= opt.modulate_densify_grad
 		opt.densify_grad_abs_threshold *= opt.modulate_densify_grad
 
@@ -65,7 +65,8 @@ def training(dataset, opt, pipe, args):
 	first_iter = 0
 	tb_writer = prepare_output_and_logger(dataset)
 	gaussians = GaussianModel(dataset.sh_degree)
-	scene = Scene(dataset, gaussians)
+	load_iter = -1 if dataset.load_iter else None
+	scene = Scene(dataset, gaussians, load_iteration=load_iter)
 	gaussians.training_setup(opt)
 	if checkpoint:
 		(model_params, first_iter) = torch.load(checkpoint)
@@ -142,8 +143,21 @@ def training(dataset, opt, pipe, args):
 		visibility_count = torch.zeros_like(gaussians.get_opacity[..., 0], dtype=torch.uint8)
 
 		bg = torch.rand((3), device="cuda") if opt.random_background else background
+		
+		
+		if opt.grid_size == 1:
+			pmask = torch.sort(torch.rand(partial_height * partial_width, opt.mask_height * opt.mask_width, device=torch.device('cuda'))).indices.to(torch.int32)
+		else:
+			assert opt.mask_height % opt.grid_size == 0
+			assert opt.mask_width % opt.grid_size == 0
+			x = torch.arange(opt.mask_height * opt.mask_width, device=torch.device('cuda')).reshape(opt.mask_height, opt.mask_width)
+			x = x[::opt.grid_size, ::opt.grid_size].flatten()
+			x = x[torch.rand(partial_height * partial_width, x.shape[0], device=torch.device('cuda')).sort(dim=-1).indices]
+			x = torch.stack([x+i for i in range(opt.grid_size)], dim=-1)
+			x = torch.stack([x+i*opt.mask_width for i in range(opt.grid_size)], dim=-1)
+			pmask = x.reshape(partial_height * partial_width, -1).to(torch.int32)
+			
 
-		pmask = torch.sort(torch.rand(partial_height * partial_width, opt.mask_height * opt.mask_width, device=torch.device('cuda'))).indices.to(torch.int32)
 		kwargs = {
 			"mask" : pmask,
 			"normalize_grad2D" : opt.normalize_grad2D
@@ -182,8 +196,11 @@ def training(dataset, opt, pipe, args):
 			loss = (1.0 - lambda_dssim) * Ll
 			if lambda_dssim > 0:
 				loss += lambda_dssim * (1 - ssim(image, gt_image)).mean()
-			
-		loss = loss / len(cams)
+
+		if not opt.grad_sum:
+			loss = loss / len(cams)
+		if not opt.evaluate_time and iteration % 10 == 0:
+			tb_writer.add_scalar('train/loss', loss, iteration)
 		loss.backward()
 		#########################
 
@@ -197,6 +214,9 @@ def training(dataset, opt, pipe, args):
 				tb_writer.add_scalar(f'train/R', log_buffer["R"], iteration)
 				tb_writer.add_scalar(f'train/BR', log_buffer["BR"], iteration)
 				tb_writer.add_scalar(f'train/lambda_dssim', lambda_dssim, iteration)
+				if opt.use_beta:
+					tb_writer.add_scalar(f'train/beta_min', beta.min(), iteration)
+					tb_writer.add_scalar(f'train/beta_max', beta.max(), iteration)
 
 		if opt.gs_type == "mcmc":
 			reg_loss = 0
@@ -292,13 +312,15 @@ def training(dataset, opt, pipe, args):
 				torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")           
 
 	end_time = time.time()
-	if forced_exit is None and iteration not in saving_iterations:
-		print("\n[ITER {}] Saving Gaussians".format(iteration))
-		scene.save(iteration)
 	if opt.evaluate_time:
 		elasped_sec = end_time - start_time
 		with open(os.path.join(dataset.model_path, "elapsed.txt"), "w") as f:
-			f.write(str(timedelta(seconds=elasped_sec)))
+			time_str = str(timedelta(seconds=elasped_sec))
+			f.write(time_str)
+			print(f"Elapsed time : {time_str}")
+	if forced_exit is None or opt.evaluate_time:
+		print("\n[ITER {}] Saving Gaussians".format(iteration))
+		scene.save(iteration)
 	with open(os.path.join(dataset.model_path, "configs.txt"), "w") as f:
 		for key, value in dataset.attr_save.items():
 			f.write(f"{key} : {value}\n")

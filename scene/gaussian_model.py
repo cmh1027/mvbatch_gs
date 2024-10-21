@@ -140,7 +140,7 @@ class GaussianModel:
             else:
                 probs[probs < opacity_threshold] = 0.
         elif method == "beta":
-            probs = self.get_beta
+            probs = self.get_beta * self.get_scaling.max(dim=-1, keepdim=True).values
             # probs[probs < beta_threshold] = 0.
         elif method == "both":
             probs = self.get_opacity
