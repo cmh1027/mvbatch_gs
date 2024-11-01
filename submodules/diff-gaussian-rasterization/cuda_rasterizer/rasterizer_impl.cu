@@ -268,16 +268,18 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 	const float* viewmatrix,
 	const float* projmatrix,
 	const float* cam_pos,
-	const float tan_fovx, float tan_fovy,
+	const float* focal_x, 
+	const float* focal_y,
+	const float* tan_fovx, 
+	const float* tan_fovy,
 	float* out_color,
 	float* out_beta,
 	float* out_depth,
 	int* radii,
 	const int* mask,
+	const float low_pass,
 	bool debug)
 {
-	const float focal_y = height / (2.0f * tan_fovy);
-	const float focal_x = width / (2.0f * tan_fovx);
 	const dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
 	const dim3 block(BLOCK_X, BLOCK_Y, 1);
 	const dim3 render_tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, B);
@@ -298,12 +300,15 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		viewmatrix, projmatrix,
 		(glm::vec3*)cam_pos,
 		width, height,
-		focal_x, focal_y,
-		tan_fovx, tan_fovy,
+		focal_x, 
+		focal_y,
+		tan_fovx, 
+		tan_fovy,
 		tile_grid,
 		mask,
 		cacheState.batch_num_rendered,
-		cacheState.batch_rendered_check
+		cacheState.batch_rendered_check,
+		low_pass
 	), debug)
 
     cub::DeviceScan::InclusiveSum(cacheState.scanning_space, cacheState.scan_size, cacheState.batch_num_rendered, cacheState.batch_num_rendered_sums, P);
@@ -331,8 +336,10 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		viewmatrix, projmatrix,
 		(glm::vec3*)cam_pos,
 		width, height,
-		focal_x, focal_y,
-		tan_fovx, tan_fovy,
+		focal_x, 
+		focal_y,
+		tan_fovx, 
+		tan_fovy,
 		radii,
 		geomState.means2D,
 		geomState.depths,
@@ -344,7 +351,8 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		geomState.tiles_touched,
 		mask,
 		geomState.point_index,
-		geomState.point_batch_index
+		geomState.point_batch_index,
+		low_pass
 	), debug)
 
 
@@ -435,7 +443,10 @@ void CudaRasterizer::Rasterizer::backward(
 	const float* viewmatrix,
 	const float* projmatrix,
 	const float* campos,
-	const float tan_fovx, float tan_fovy,
+	const float* focal_x, 
+	const float* focal_y,
+	const float* tan_fovx, 
+	const float* tan_fovy,
 	const int* radii,
 	char* cache_buffer,
 	char* geom_buffer,
@@ -458,6 +469,7 @@ void CudaRasterizer::Rasterizer::backward(
 	const int* mask,
 	int* point_idx,
 	bool normalize_grad2D,
+	const float low_pass,
 	bool debug)
 {
 	CacheState cacheState = CacheState::fromChunk(cache_buffer, P, B);
@@ -467,8 +479,6 @@ void CudaRasterizer::Rasterizer::backward(
 	
 	assert(sizeof(int) == sizeof(uint32_t));
 	cudaMemcpy(point_idx, geomState.point_index, sizeof(int)*BR, cudaMemcpyDeviceToDevice);
-	const float focal_y = height / (2.0f * tan_fovy);
-	const float focal_x = width / (2.0f * tan_fovx);
 
 	const dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
 	const dim3 block(BLOCK_X, BLOCK_Y, 1);
@@ -515,8 +525,10 @@ void CudaRasterizer::Rasterizer::backward(
 		geomState.cov3D,
 		viewmatrix,
 		projmatrix,
-		focal_x, focal_y,
-		tan_fovx, tan_fovy,
+		focal_x, 
+		focal_y,
+		tan_fovx, 
+		tan_fovy,
 		(glm::vec3*)campos,
 		(float4*)dL_dmean2D,
 		dL_dconic,
@@ -529,6 +541,7 @@ void CudaRasterizer::Rasterizer::backward(
 		(glm::vec4*)dL_drot,
 		mask,
 		geomState.point_index,
-		geomState.point_batch_index
+		geomState.point_batch_index,
+		low_pass
 	), debug)
 }

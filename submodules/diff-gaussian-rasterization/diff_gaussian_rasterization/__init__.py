@@ -72,6 +72,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.sh_degree,
             raster_settings.campos,
             raster_settings.mask,
+            raster_settings.low_pass,
             raster_settings.debug
         )
         
@@ -122,10 +123,12 @@ class _RasterizeGaussians(torch.autograd.Function):
                 imgBuffer,
                 mask,
                 raster_settings.normalize_grad2D,
+                raster_settings.low_pass,
+                raster_settings.separate_batch,
                 raster_settings.debug)
 
-        grad_means2D, grad_opacities, grad_means3D, grad_sh, grad_scales, grad_rotations, grad_betas = _C.rasterize_gaussians_backward(*args)
-
+        grad_means2D, grad_opacities, grad_means3D, grad_sh, grad_scales, grad_rotations, grad_betas, denom = _C.rasterize_gaussians_backward(*args)
+        raster_settings.log_buffer["denom"] = denom
         grads = (
             grad_means3D,
             grad_means2D,
@@ -142,8 +145,8 @@ class _RasterizeGaussians(torch.autograd.Function):
 class GaussianRasterizationSettings(NamedTuple):
     image_height: int
     image_width: int 
-    tanfovx : float
-    tanfovy : float
+    tanfovx : torch.Tensor
+    tanfovy : torch.Tensor
     bg : torch.Tensor
     scale_modifier : float
     viewmatrix : torch.Tensor
@@ -152,9 +155,10 @@ class GaussianRasterizationSettings(NamedTuple):
     campos : torch.Tensor
     debug : bool
     mask : torch.Tensor
+    low_pass : float
     log_buffer: dict
     normalize_grad2D : bool
-    
+    separate_batch: bool
 
 class GaussianRasterizer(nn.Module):
     def __init__(self, raster_settings):

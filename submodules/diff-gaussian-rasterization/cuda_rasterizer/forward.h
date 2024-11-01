@@ -31,12 +31,15 @@ namespace FORWARD
 		const float* projmatrix,
 		const glm::vec3* cam_pos,
 		const int W, int H,
-		const float focal_x, float focal_y,
-		const float tan_fovx, float tan_fovy,
+		const float* focal_x, 
+		const float* focal_y,
+		const float* tan_fovx, 
+		const float* tan_fovy,
 		const dim3 grid,
 		const int* mask,
 		int* batch_num_rendered,
-		bool* batch_rendered_check
+		bool* batch_rendered_check,
+		const float low_pass
 	);
 
 	void preprocess(int BR, int P, int D, int M,
@@ -52,8 +55,10 @@ namespace FORWARD
 		const float* projmatrix,
 		const glm::vec3* cam_pos,
 		const int W, int H,
-		const float focal_x, float focal_y,
-		const float tan_fovx, float tan_fovy,
+		const float* focal_x, 
+		const float* focal_y,
+		const float* tan_fovx, 
+		const float* tan_fovy,
 		int* radii,
 		float2* points_xy_image,
 		float* depths,
@@ -65,7 +70,8 @@ namespace FORWARD
 		uint32_t* tiles_touched,
 		const int* mask,
 		const int* point_index,
-		const int* point_batch_index
+		const int* point_batch_index,
+		const float low_pass
 	);
 
 	// Main rasterization method.

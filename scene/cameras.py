@@ -43,6 +43,8 @@ class Camera(nn.Module):
             self.original_image *= gt_alpha_mask.to(self.data_device)
         else:
             self.original_image *= torch.ones((1, self.image_height, self.image_width), device=self.data_device)
+        
+        self.frequency_map = torch.fft.fft2(self.original_image[None]).squeeze().abs()
 
         self.zfar = 100.0
         self.znear = 0.01

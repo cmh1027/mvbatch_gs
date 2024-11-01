@@ -14,12 +14,12 @@ import json
 import torch
 import torch.nn.functional as F
 from random import randint
-from utils.loss_utils import pixel_loss, ssim, get_lambda_dssim
+from utils.loss_utils import pixel_loss, ssim
 from lpipsPyTorch import lpips
 from gaussian_renderer import render
 import sys
 from scene import Scene, GaussianModel
-from utils.general_utils import safe_state, draw_graph, draw_two_graphs
+from utils.general_utils import safe_state, draw_graph, draw_two_graphs, compute_pts_func
 from tqdm import tqdm
 from utils.image_utils import psnr, apply_depth_colormap, pcoef_freq
 from argparse import ArgumentParser, Namespace
@@ -49,19 +49,21 @@ def training(dataset, opt, pipe, args):
 
 	if opt.gs_type == "original":
 		dataset.init_scale = 1
-		# opt.densify_until_iter = 15000
-		if opt.max_points == -1:
-			opt.max_points = 8_000_000
+		opt.densify_until_iter = 25000
 		opt.densify_grad_threshold *= opt.modulate_densify_grad
 		opt.densify_grad_abs_threshold *= opt.modulate_densify_grad
+		opt.predictable_growth_degree = opt.predictable_growth_degree_3dgs
+		if dataset.cap_max_gs != -1:
+			dataset.cap_max = dataset.cap_max_gs
+	else:
+		opt.predictable_growth_degree = opt.predictable_growth_degree_mcmc
 
-	if opt.lambda_dssim != -1:
-		opt.lambda_dssim_init = opt.lambda_dssim
-		opt.lambda_dssim_end = opt.lambda_dssim
-	
+	if opt.predictable_growth:
+		print(f"Predictable growth degree : {opt.predictable_growth_degree}")
 	if dataset.cap_max == -1:
 		print("Please specify the maximum number of Gaussians using --cap_max.")
 		exit()
+
 	first_iter = 0
 	tb_writer = prepare_output_and_logger(dataset)
 	gaussians = GaussianModel(dataset.sh_degree)
@@ -85,30 +87,20 @@ def training(dataset, opt, pipe, args):
 
 	dummy_cam = scene.getTrainCameras()[0]
 	H, W = dummy_cam.image_height, dummy_cam.image_width
-	if opt.batch_size == 1 and opt.single_partial_rays:
-		n_rays = (H * W) // opt.single_partial_rays_denom
-	else:
-		if opt.batch_partition:
-			if opt.batch_partition_denom == -1:
-				n_rays = (H * W) // opt.batch_size
-			else:
-				n_rays = (H * W) // opt.batch_partition_denom
-		else:
-			n_rays = (H * W) 
 
 	assert opt.mask_height == opt.mask_width
 	partial_height = (H + opt.mask_height - 1) // opt.mask_height
 	partial_width = (W + opt.mask_width - 1) // opt.mask_width
 
-	print(f"Image ({H} x {W} = {H * W}), n_rays : {n_rays}")
-	print(f"Mask ({partial_height} x {partial_width})")
+	print(f"Image ({H} x {W} = {H * W})")
+	print(f"Tiles ({partial_height} x {partial_width})")
 	print(f"tile size {opt.mask_height} x {opt.mask_width}")
 
+	from_iter = opt.densify_from_iter
+	num_pts_func = compute_pts_func(dataset.cap_max, gaussians.num_pts, (opt.densify_until_iter - from_iter) // opt.densification_interval, opt.predictable_growth_degree)
+
 	start_time = time.time()
-
 	for iteration in range(first_iter, opt.iterations + 1): 
-		lambda_dssim = get_lambda_dssim(opt, iteration)
-
 		gt_images = []
 		if iteration == forced_exit:
 			print("FORCED EXIT")
@@ -138,12 +130,8 @@ def training(dataset, opt, pipe, args):
 		cams = [viewpoints[idx] for idx in cam_idxs]
 
 		vis_ratios = []
-		batch_vs = []
-		batch_radii = torch.zeros_like(gaussians.get_opacity[..., 0], dtype=torch.int32)
-		visibility_count = torch.zeros_like(gaussians.get_opacity[..., 0], dtype=torch.uint8)
 
 		bg = torch.rand((3), device="cuda") if opt.random_background else background
-		
 		
 		if opt.grid_size == 1:
 			pmask = torch.sort(torch.rand(partial_height * partial_width, opt.mask_height * opt.mask_width, device=torch.device('cuda'))).indices.to(torch.int32)
@@ -160,7 +148,8 @@ def training(dataset, opt, pipe, args):
 
 		kwargs = {
 			"mask" : pmask,
-			"normalize_grad2D" : opt.normalize_grad2D
+			"low_pass" : args.low_pass,
+			"separate_batch" : opt.separate_batch
 		} 
 		render_pkg = render(cams, gaussians, pipe, bg, **kwargs)
 
@@ -174,31 +163,27 @@ def training(dataset, opt, pipe, args):
 		)
 		beta = render_pkg["beta"] + opt.beta_min if opt.use_beta else None
 
-		visibility_count = visibility_count + visibility_filter.to(visibility_count.dtype)
-		batch_vs += [viewspace_point_tensor]
-		batch_radii = torch.maximum(radii, batch_radii)
-
 		if len(cams) > 1:
 			gt_images = torch.stack([cam.original_image.cuda() for cam in cams])
 			collage_mask = make_category_mask(pmask, H, W, opt.batch_size).to(torch.int64)
 			collage_mask = collage_mask.unsqueeze(0).repeat(3,1,1)
 			collage_gt = torch.gather(gt_images, 0, collage_mask.unsqueeze(0)).squeeze(0)
 			Ll = pixel_loss(image, collage_gt, beta=beta, ltype=opt.loss_type, beta_ltype=opt.beta_loss_type, detach=opt.beta_detach)
-			loss = (1.0 - lambda_dssim) * Ll
-			if lambda_dssim > 0:
+			loss = (1.0 - opt.lambda_dssim) * Ll
+			if opt.lambda_dssim > 0:
 				for i in range(len(cams)):
 					collage_mask_partial = torch.where(collage_mask[0:1] == i, 1., 0.)
 					ssim_map = ssim(image, collage_gt, mask=collage_mask_partial, mask_size=opt.mask_width)
-					loss += lambda_dssim * (1 - ssim_map).mean()
+					loss += opt.lambda_dssim * (1 - ssim_map).mean()
 		else:
 			gt_image = cams[0].original_image
 			Ll = pixel_loss(image, gt_image, beta=beta, ltype=opt.loss_type, beta_ltype=opt.beta_loss_type, detach=opt.beta_detach)
-			loss = (1.0 - lambda_dssim) * Ll
-			if lambda_dssim > 0:
-				loss += lambda_dssim * (1 - ssim(image, gt_image)).mean()
+			loss = (1.0 - opt.lambda_dssim) * Ll
+			if opt.lambda_dssim > 0:
+				loss += opt.lambda_dssim * (1 - ssim(image, gt_image)).mean()
 
-		if not opt.grad_sum:
-			loss = loss / len(cams)
+
+		loss = loss / len(cams)
 		if not opt.evaluate_time and iteration % 10 == 0:
 			tb_writer.add_scalar('train/loss', loss, iteration)
 		loss.backward()
@@ -213,16 +198,17 @@ def training(dataset, opt, pipe, args):
 				tb_writer.add_scalar(f'train/num_points', len(gaussians._xyz), iteration)
 				tb_writer.add_scalar(f'train/R', log_buffer["R"], iteration)
 				tb_writer.add_scalar(f'train/BR', log_buffer["BR"], iteration)
-				tb_writer.add_scalar(f'train/lambda_dssim', lambda_dssim, iteration)
 				if opt.use_beta:
 					tb_writer.add_scalar(f'train/beta_min', beta.min(), iteration)
 					tb_writer.add_scalar(f'train/beta_max', beta.max(), iteration)
 
+		reg_loss = torch.tensor(0., requires_grad=True)
+
 		if opt.gs_type == "mcmc":
-			reg_loss = 0
-			reg_loss += args.opacity_reg * torch.abs(gaussians.get_opacity).mean() 
-			reg_loss += args.scale_reg * torch.abs(gaussians.get_scaling).mean() 
-			reg_loss.backward()
+			reg_loss = reg_loss + args.opacity_reg * gaussians.get_opacity.mean() 
+			reg_loss = reg_loss + args.scale_reg * gaussians.get_scaling.mean()
+		
+		reg_loss.backward()
 
 		with torch.no_grad():
 			# Progress bar
@@ -233,15 +219,13 @@ def training(dataset, opt, pipe, args):
 					"num_pts": len(gaussians._xyz),
 					"batch": opt.batch_size
 				}
-				if "lambda_dssim" in locals():
-					postfix["ssim_l"] = lambda_dssim
 				progress_bar.set_postfix(postfix)
 				progress_bar.update(10)
 			if iteration == opt.iterations:
 				progress_bar.close()
 			# Log and save
 			if not opt.evaluate_time:
-				training_report(opt, tb_writer, iteration, Ll, loss, testing_iterations, scene, render, (pipe, background))
+				training_report(opt, tb_writer, iteration, Ll, loss, testing_iterations, scene, render, (pipe, background), {"low_pass":args.low_pass})
 
 			if (iteration in saving_iterations and not opt.evaluate_time):
 				print("\n[ITER {}] Saving Gaussians".format(iteration))
@@ -249,28 +233,43 @@ def training(dataset, opt, pipe, args):
 
 			if iteration < opt.densify_until_iter:
 				if opt.gs_type == "original":
-					mask = visibility_count > 0
-					gaussians.max_radii2D[mask] = torch.max(gaussians.max_radii2D[mask], batch_radii[mask])
-					batch_vs = torch.stack([t.grad for t in batch_vs], dim=0)  # (B, N, 4)
-					vs = batch_vs[..., 0:2].norm(dim=-1, keepdim=True).sum(dim=0) 
-					vs_abs = batch_vs[..., 2:4].norm(dim=-1, keepdim=True).sum(dim=0) 
+					mask = visibility_filter 
+					gaussians.max_radii2D[mask] = torch.max(gaussians.max_radii2D[mask], radii[mask])
+
+					vs = viewspace_point_tensor.grad[..., 0:1]
+					vs_abs = viewspace_point_tensor.grad[..., 1:2]
 					gaussians.add_densification_stats(vs, vs_abs, mask)
 
 				if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+					dense_step = (iteration - from_iter) // opt.densification_interval
+					next_pts_count = num_pts_func(dense_step)
+
 					if opt.gs_type == "original":
 						size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-						gaussians.densify_and_prune(opt, opt.opacity_reset_threshold / 2, scene.cameras_extent, size_threshold, iteration)
+						
+						pts_count = min(next_pts_count - gaussians.num_pts, gaussians.num_pts)
+						gaussians.densify_and_prune(tb_writer, opt, opt.opacity_reset_threshold / 2, scene.cameras_extent, size_threshold, iteration, pts_count)
+
+						if (iteration - opt.densification_interval) % opt.opacity_reset_interval == 0:
+							from_iter = iteration
+							num_pts_func = compute_pts_func(dataset.cap_max, gaussians.num_pts, (opt.densify_until_iter - from_iter) // opt.densification_interval, opt.predictable_growth_degree)
+
 
 					elif opt.gs_type == "mcmc":
 						dead_mask = (gaussians.get_opacity <= 0.005).squeeze(-1)
 						gaussians.relocate_gs(opt, dead_mask=dead_mask)
 						if not opt.evaluate_time:
 							tb_writer.add_scalar(f'train/dead_gaussians', dead_mask.sum().item(), iteration)
-						gaussians.add_new_gs(opt, tb_writer, iteration=iteration, cap_max=args.cap_max, add_ratio=opt.add_ratio, beta_add_ratio=opt.beta_add_ratio)
-					
+						if opt.predictable_growth:
+							add_ratio = next_pts_count / gaussians.num_pts - 1
+						else:
+							add_ratio = opt.add_ratio
+						gaussians.add_new_gs(opt, tb_writer, iteration=iteration, cap_max=args.cap_max, add_ratio=add_ratio)
+
 				if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
 					if opt.gs_type == "original":
 						gaussians.reset_opacity(opt.opacity_reset_threshold)
+
 
 			if iteration % args.vis_iteration_interval == 0 and not opt.evaluate_time:
 				os.makedirs(os.path.join(dataset.model_path, "vis"), exist_ok=True)
@@ -282,15 +281,17 @@ def training(dataset, opt, pipe, args):
 					l1_map = torch.abs(image-gt_image).mean(dim=0, keepdim=True)
 					aux_map = l1_map if opt.use_beta else depth
 					beta_map = render_pkg["beta"] if opt.use_beta else torch.zeros_like(depth)
-					pred = torch.cat([image, apply_depth_colormap(aux_map.permute(1, 2, 0), colormap='gray')], dim=-1)
-					gt = torch.cat([gt_image, apply_depth_colormap(beta_map.permute(1, 2, 0), colormap='gray')], dim=-1)
+					pred = torch.cat([image, apply_depth_colormap(aux_map.permute(1, 2, 0))], dim=-1)
+					gt = torch.cat([gt_image, apply_depth_colormap(beta_map.permute(1, 2, 0))], dim=-1)
 					figs = [pred, gt]
 					save_image(torch.cat(figs, dim=1), os.path.join(dataset.model_path, f"vis/iter_{iteration}.png"))
 
 			if opt.log_batch and iteration % opt.log_batch_interval == 0 and not opt.evaluate_time:
 				os.makedirs(os.path.join(dataset.model_path, "batch"), exist_ok=True)
 				with torch.no_grad():
-					save_image(torch.cat(gt_images, dim=1), os.path.join(dataset.model_path, f"batch/{'%05d' % iteration}.png"))
+					for i, image in enumerate(gt_images.unbind(dim=0)):
+						os.makedirs(os.path.join(dataset.model_path, f"batch/{'%05d' % iteration}"), exist_ok=True)
+						save_image(image, os.path.join(dataset.model_path, f"batch/{'%05d' % iteration}/{'%05d' % i}.png"))
 
 			# Optimizer step
 			if iteration < opt.iterations:
@@ -318,7 +319,7 @@ def training(dataset, opt, pipe, args):
 			time_str = str(timedelta(seconds=elasped_sec))
 			f.write(time_str)
 			print(f"Elapsed time : {time_str}")
-	if forced_exit is None or opt.evaluate_time:
+	if forced_exit is None and opt.evaluate_time:
 		print("\n[ITER {}] Saving Gaussians".format(iteration))
 		scene.save(iteration)
 	with open(os.path.join(dataset.model_path, "configs.txt"), "w") as f:
@@ -346,7 +347,7 @@ def prepare_output_and_logger(args):
 		print("Tensorboard not available: not logging progress")
 	return tb_writer
 
-def training_report(opt, tb_writer, iteration, Ll, loss, testing_iterations, scene : Scene, renderFunc, renderArgs):
+def training_report(opt, tb_writer, iteration, Ll, loss, testing_iterations, scene : Scene, renderFunc, renderArgs, renderKwargs):
 	if tb_writer:
 		tb_writer.add_scalar(f'train_loss_patches/{opt.loss_type}_loss', Ll.item(), iteration)
 		tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
@@ -366,7 +367,7 @@ def training_report(opt, tb_writer, iteration, Ll, loss, testing_iterations, sce
 				pcoef_low_freq_test = 0.0
 				pcoef_high_freq_test = 0.0
 				for idx, viewpoint in tqdm(enumerate(cameras), desc=f"Evaluating {mode}...", leave=False, total=len(cameras)):
-					image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
+					image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, **renderKwargs)["render"], 0.0, 1.0)
 					gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
 					if tb_writer and (idx < 5) and mode == 'test':
 						tb_writer.add_images('test' + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
@@ -442,7 +443,10 @@ if __name__ == "__main__":
 	parser.add_argument("--forced_exit", type=int)
 	parser.add_argument("--render_iter", type=int)
 	parser.add_argument("--override_cap_max", type=int)
+	parser.add_argument("--override_degree_3dgs", type=float)
+	parser.add_argument("--override_degree_mcmc", type=float)
 	parser.add_argument("--batch_size_decrease_interval", nargs="+", type=int)
+	parser.add_argument("--low_pass", default=0.3, type=float)
 	args = parser.parse_args(sys.argv[1:])
 	if args.config is not None:
 		# Load the configuration file
@@ -452,6 +456,10 @@ if __name__ == "__main__":
 			setattr(args, key, value)
 	if args.override_cap_max is not None:
 		args.cap_max = args.override_cap_max
+	if args.override_degree_3dgs is not None:
+		args.predictable_growth_degree_3dgs = args.override_degree_3dgs
+	if args.override_degree_mcmc is not None:
+		args.predictable_growth_degree_mcmc = args.override_degree_mcmc
 	
 	args.save_iterations.append(args.iterations)
 	
@@ -464,10 +472,7 @@ if __name__ == "__main__":
 	# network_gui.init(args.ip, args.port)
 	torch.autograd.set_detect_anomaly(args.detect_anomaly)
 	training(lp.extract(args), op.extract(args), pp.extract(args), args)
-	# All done
-	
-	# print("\nTraining complete.")
 	render_iter = op.iterations if args.render_iter is None else args.render_iter
 	if args.forced_exit is None:
-		render_sets(lp.extract(args), render_iter, pp.extract(args), True, False)
+		render_sets(lp.extract(args), render_iter, pp.extract(args), True, False, low_pass=args.low_pass)
 		evaluate([args.model_path])

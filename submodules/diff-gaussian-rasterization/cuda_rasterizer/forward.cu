@@ -71,7 +71,7 @@ __device__ glm::vec3 computeColorFromSH(int idx, int point_idx, int deg, int max
 }
 
 // Forward version of 2D covariance matrix computation
-__device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y, float tan_fovx, float tan_fovy, const float* cov3D, const float* viewmatrix)
+__device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y, float tan_fovx, float tan_fovy, const float* cov3D, const float* viewmatrix, const float low_pass)
 {
 	// The following models the steps outlined by equations 29
 	// and 31 in "EWA Splatting" (Zwicker et al., 2002). 
@@ -107,8 +107,8 @@ __device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y,
 
 	// Apply low-pass filter: every Gaussian should be at least
 	// one pixel wide/high. Discard 3rd row and column.
-	cov[0][0] += 0.3f;
-	cov[1][1] += 0.3f;
+	cov[0][0] += low_pass;
+	cov[1][1] += low_pass;
 	return { float(cov[0][0]), float(cov[0][1]), float(cov[1][1]) };
 }
 
@@ -160,12 +160,16 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	const float* projmatrix,
 	const glm::vec3* cam_pos,
 	const int W, int H,
-	const float tan_fovx, float tan_fovy,
-	const float focal_x, float focal_y,
+	const float* tan_fovx, 
+	const float* tan_fovy,
+	const float* focal_x, 
+	const float* focal_y,
 	const dim3 grid,
 	const int* mask,
 	int* batch_num_rendered,
-	bool* batch_rendered_check)
+	bool* batch_rendered_check,
+	const float low_pass
+)
 {
 	auto idx = cg::this_grid().thread_rank();
 
@@ -194,7 +198,7 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 
 	float cov3D_temp[6];
 	computeCov3D(scales[idx], scale_modifier, rotations[idx], cov3D_temp);
-	float3 cov = computeCov2D(p_orig, focal_x, focal_y, tan_fovx, tan_fovy, cov3D_temp, viewmatrix);
+	float3 cov = computeCov2D(p_orig, focal_x[batch_idx], focal_y[batch_idx], tan_fovx[batch_idx], tan_fovy[batch_idx], cov3D_temp, viewmatrix, low_pass);
 
 	float det = (cov.x * cov.z - cov.y * cov.y);
 	if (det == 0.0f)
@@ -228,8 +232,10 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	const float* projmatrix,
 	const glm::vec3* cam_pos,
 	const int W, int H,
-	const float tan_fovx, float tan_fovy,
-	const float focal_x, float focal_y,
+	const float* tan_fovx, 
+	const float* tan_fovy,
+	const float* focal_x, 
+	const float* focal_y,
 	int* radii,
 	float2* points_xy_image,
 	float* depths,
@@ -241,7 +247,8 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	uint32_t* tiles_touched,
 	const int* mask,
 	const int* point_index,
-	const int* point_batch_index
+	const int* point_batch_index,
+	const float low_pass
 )
 {
 	auto idx = cg::this_grid().thread_rank();
@@ -278,7 +285,7 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 
 
 	// Compute 2D screen-space covariance matrix
-	float3 cov = computeCov2D(p_orig, focal_x, focal_y, tan_fovx, tan_fovy, cov3D, viewmatrix);
+	float3 cov = computeCov2D(p_orig, focal_x[batch_idx], focal_y[batch_idx], tan_fovx[batch_idx], tan_fovy[batch_idx], cov3D, viewmatrix, low_pass);
 
 	// Invert covariance (EWA algorithm)
 	float det = (cov.x * cov.z - cov.y * cov.y);
@@ -534,8 +541,10 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 	const float* projmatrix,
 	const glm::vec3* cam_pos,
 	const int W, int H,
-	const float focal_x, float focal_y,
-	const float tan_fovx, float tan_fovy,
+	const float* focal_x, 
+	const float* focal_y,
+	const float* tan_fovx, 
+	const float* tan_fovy,
 	int* radii,
 	float2* means2D,
 	float* depths,
@@ -547,7 +556,8 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 	uint32_t* tiles_touched,
 	const int* mask,
 	const int* point_index,
-	const int* point_batch_index
+	const int* point_batch_index,
+	const float low_pass
 )
 {
 	preprocessCUDA<NUM_CHANNELS> << <(BR + 255) / 256, 256 >> > (
@@ -577,7 +587,8 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 		tiles_touched,
 		mask,
 		point_index,
-		point_batch_index
+		point_batch_index,
+		low_pass
 	);
 	ERROR_CHECK
 }
@@ -591,12 +602,15 @@ void FORWARD::measureBufferSize(int P, int D, int M, int B,
 	const float* projmatrix,
 	const glm::vec3* cam_pos,
 	const int W, int H,
-	const float focal_x, float focal_y,
-	const float tan_fovx, float tan_fovy,
+	const float* focal_x, 
+	const float* focal_y,
+	const float* tan_fovx, 
+	const float* tan_fovy,
 	const dim3 grid,
 	const int* mask,
 	int* batch_num_rendered,
-	bool* batch_rendered_check
+	bool* batch_rendered_check,
+	const float low_pass
 )
 {
 	measureBufferSizeCUDA << <(B * P + 255) / 256, 256 >> > (
@@ -614,7 +628,8 @@ void FORWARD::measureBufferSize(int P, int D, int M, int B,
 		grid,
 		mask,
 		batch_num_rendered,
-		batch_rendered_check
+		batch_rendered_check,
+		low_pass
 	);
 	ERROR_CHECK
 }

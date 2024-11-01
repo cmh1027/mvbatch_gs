@@ -1,5 +1,6 @@
 {
     "resolution": 4,
     "cap_max": 5200000,
-    "adaptive_grad_percentile": 0.8375
+    "predictable_growth_degree_3dgs": 5.0,
+    "predictable_growth_degree_mcmc": 2.0
 }

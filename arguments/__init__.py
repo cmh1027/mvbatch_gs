@@ -12,7 +12,7 @@
 from argparse import ArgumentParser, Namespace
 import sys
 import os
-
+from math import sqrt
 class GroupParams:
     def __init__(self):
         self.attr_save = {}
@@ -53,10 +53,13 @@ class ModelParams(ParamGroup):
         self._model_path = ""
         self._images = "images"
         self._resolution = -1
+        self._H = -1
+        self._W = -1
         self._white_background = False
         self.data_device = "cuda"
         self.eval = True
         self.cap_max = -1
+        self.cap_max_gs = -1
         self.init_type = "sfm"
         self.radius_mult = 3.0
         self.num_points = 100000
@@ -65,6 +68,7 @@ class ModelParams(ParamGroup):
         self.num_imgs = -1
         self.init_scale = 0.1
         self.load_iter = False
+        self.camera_distance_type = "log" # ["linear", "log"]
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -95,11 +99,7 @@ class OptimizationParams(ParamGroup):
         self.loss_type = "l1"
         self.beta_loss_type = "l1"
 
-        self.lambda_dssim = -1
-        self.lambda_dssim_init = 0.2
-        self.lambda_dssim_end = 0.2
-        self.lambda_dssim_u = 0.2
-        self.lambda_dssim_v = 0.8
+        self.lambda_dssim = 0.2
 
         self.densification_interval = 100
         self.densify_from_iter = 500
@@ -112,10 +112,10 @@ class OptimizationParams(ParamGroup):
         self.densify_grad_threshold = 0.0002
         self.densify_grad_abs_threshold = 0.0004
         self.modulate_densify_grad = 1.
-        self.adaptive_grad_threshold = False
-        self.adaptive_grad_percentile = 0.8375
-        self.max_points = -1
         self.normalize_grad2D = False
+        self.separate_batch = False
+        self.split_ratio = 3/23
+        self.clone_ratio = 20/23
 
         ### 3dgs-mcmc ###
         self.add_ratio = 0.05
@@ -126,21 +126,13 @@ class OptimizationParams(ParamGroup):
         self.sample_opacity_threshold = 1.0
         self.sample_opacity_prune = "bigger"
         self.sample_beta_threshold = 1.0
-        self.beta_add_ratio = 0.
         
         self.batch_sample_strategy = "max" # ["min", "max", "random"]
         self.batch_size = 1
         self.batch_until = -1
-        self.batch_partition = False
-        self.batch_partition_denom = -1
         self.mask_height = 32
         self.mask_width = 32
         self.grid_size = 1
-
-        self.single_partial_rays = False
-        self.single_partial_rays_denom = 1
-        self.log_single_partial = False
-        self.log_single_partial_interval = 100
 
         self.only_psnr = False
         self.log_batch = False
@@ -153,7 +145,12 @@ class OptimizationParams(ParamGroup):
         self.use_beta = False
         self.beta_detach = False
         self.beta_min = 0.1
-        self.grad_sum = False
+
+        self.predictable_growth = False
+        self.predictable_growth_degree = 2.0
+        self.predictable_growth_degree_3dgs = 2.0
+        self.predictable_growth_degree_mcmc = 2.0
+        
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

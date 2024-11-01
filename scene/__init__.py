@@ -103,19 +103,31 @@ class Scene:
         # 0 => 0
         # MAX => inf
         R_max = R_distance.max(dim=1, keepdim=True)[0]
-        R_distance = -torch.log((R_max - R_distance) / R_max + 1e-6) # (0, inf)
         T_max = T_distance.max(dim=1, keepdim=True)[0]
-        T_distance = -torch.log((T_max - T_distance) / T_max + 1e-6)
+        if args.camera_distance_type == "log":
+            R_distance_max = (-torch.log((R_max - R_distance) / R_max + 1e-6)).clamp_(min=0)
+            T_distance_max = (-torch.log((T_max - T_distance) / T_max + 1e-6)).clamp_(min=0)
+            R_distance_min = (-torch.log((R_distance) / R_max + 1e-6)).clamp_(min=0)
+            T_distance_min = (-torch.log((T_distance) / T_max + 1e-6)).clamp_(min=0)
+        elif args.camera_distance_type == "linear":
+            R_distance_max = R_distance / R_max 
+            T_distance_max = T_distance / T_max
+            R_distance_min = (R_max-R_distance) / R_max 
+            T_distance_min = (T_max-T_distance) / T_max
+        else:
+            raise NotImplementedError
 
         t_coef, r_coef = args.t_coef / (args.t_coef + args.r_coef), args.r_coef / (args.t_coef + args.r_coef)
-        TR_distance = t_coef * T_distance + r_coef * R_distance
-        self.TR_max_prob = TR_distance.clone().cuda()
+        TR_distance_min = t_coef * T_distance_min + r_coef * R_distance_min
+        TR_distance_max = t_coef * T_distance_max + r_coef * R_distance_max
+        self.TR_max_prob = TR_distance_max.clone().cuda()
+        self.TR_min_prob = TR_distance_min.clone().cuda()
+
         self.TR_max_prob.fill_diagonal_(0.)
         self.TR_max_prob = self.TR_max_prob / self.TR_max_prob.sum(dim=1, keepdim=True)
-
-        self.TR_min_prob = (1 / TR_distance).cuda()
         self.TR_min_prob.fill_diagonal_(0.)
         self.TR_min_prob = self.TR_min_prob / self.TR_min_prob.sum(dim=1, keepdim=True)
+        
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))

@@ -147,19 +147,25 @@ __global__ void computeCov2DCUDA(int BR, int P,
 	const float3* means,
 	const int* radii,
 	const float* cov3Ds,
-	const float h_x, float h_y,
-	const float tan_fovx, float tan_fovy,
+	const float* h_x, 
+	const float* h_y,
+	const float* tan_fovx, 
+	const float* tan_fovy,
 	const float* view_matrix,
 	const float* dL_dconics,
 	float3* dL_dmeans,
 	float* dL_dcov,
 	const int* mask,
 	const int* point_index,
-	const int* point_batch_index)
+	const int* point_batch_index,
+	const float low_pass
+)
 {
 	auto idx = cg::this_grid().thread_rank();
 	int point_idx = point_index[idx];
 	int batch_idx = point_batch_index[idx];
+	const float focal_x = h_x[batch_idx];
+	const float focal_y = h_y[batch_idx];
 	/* batch offset */
 	view_matrix += batch_idx * 16;
 	radii += P * batch_idx;
@@ -175,8 +181,8 @@ __global__ void computeCov2DCUDA(int BR, int P,
 	float3 dL_dconic = { dL_dconics[4 * idx], dL_dconics[4 * idx + 1], dL_dconics[4 * idx + 3] };
 	float3 t = transformPoint4x3(mean, view_matrix);
 	
-	const float limx = 1.3f * tan_fovx;
-	const float limy = 1.3f * tan_fovy;
+	const float limx = 1.3f * tan_fovx[batch_idx];
+	const float limy = 1.3f * tan_fovy[batch_idx];
 	const float txtz = t.x / t.z;
 	const float tytz = t.y / t.z;
 	t.x = min(limx, max(-limx, txtz)) * t.z;
@@ -185,8 +191,8 @@ __global__ void computeCov2DCUDA(int BR, int P,
 	const float x_grad_mul = txtz < -limx || txtz > limx ? 0 : 1;
 	const float y_grad_mul = tytz < -limy || tytz > limy ? 0 : 1;
 
-	glm::mat3 J = glm::mat3(h_x / t.z, 0.0f, -(h_x * t.x) / (t.z * t.z),
-		0.0f, h_y / t.z, -(h_y * t.y) / (t.z * t.z),
+	glm::mat3 J = glm::mat3(focal_x / t.z, 0.0f, -(focal_x * t.x) / (t.z * t.z),
+		0.0f, focal_y / t.z, -(focal_y * t.y) / (t.z * t.z),
 		0, 0, 0);
 
 	glm::mat3 W = glm::mat3(
@@ -204,9 +210,9 @@ __global__ void computeCov2DCUDA(int BR, int P,
 	glm::mat3 cov2D = glm::transpose(T) * glm::transpose(Vrk) * T;
 
 	// Use helper variables for 2D covariance entries. More compact.
-	float a = cov2D[0][0] += 0.3f;
+	float a = cov2D[0][0] += low_pass;
 	float b = cov2D[0][1];
-	float c = cov2D[1][1] += 0.3f;
+	float c = cov2D[1][1] += low_pass;
 
 	float denom = a * c - b * b;
 	float dL_da = 0, dL_db = 0, dL_dc = 0;
@@ -271,9 +277,9 @@ __global__ void computeCov2DCUDA(int BR, int P,
 	float tz3 = tz2 * tz;
 
 	// Gradients of loss w.r.t. transformed Gaussian mean t
-	float dL_dtx = x_grad_mul * -h_x * tz2 * dL_dJ02;
-	float dL_dty = y_grad_mul * -h_y * tz2 * dL_dJ12;
-	float dL_dtz = -h_x * tz2 * dL_dJ00 - h_y * tz2 * dL_dJ11 + (2 * h_x * t.x) * tz3 * dL_dJ02 + (2 * h_y * t.y) * tz3 * dL_dJ12;
+	float dL_dtx = x_grad_mul * -focal_x * tz2 * dL_dJ02;
+	float dL_dty = y_grad_mul * -focal_y * tz2 * dL_dJ12;
+	float dL_dtz = -focal_x * tz2 * dL_dJ00 - focal_y * tz2 * dL_dJ11 + (2 * focal_x * t.x) * tz3 * dL_dJ02 + (2 * focal_y * t.y) * tz3 * dL_dJ12;
 
 	// Account for transformation of mean to t
 	// t = transformPoint4x3(mean, view_matrix);
@@ -674,8 +680,9 @@ void BACKWARD::preprocess(
 	const float* cov3Ds,
 	const float* viewmatrix,
 	const float* projmatrix,
-	const float focal_x, float focal_y,
-	const float tan_fovx, float tan_fovy,
+	const float* focal_x, 
+	const float* focal_y,
+	const float* tan_fovx, const float* tan_fovy,
 	const glm::vec3* campos,
 	const float4* dL_dmean2D,
 	const float* dL_dconic,
@@ -688,7 +695,9 @@ void BACKWARD::preprocess(
 	glm::vec4* dL_drot,
 	const int* mask,
 	const int* point_index,
-	const int* point_batch_index)
+	const int* point_batch_index,
+	const float low_pass
+)
 {
 	// Propagate gradients for the path of 2D conic matrix computation. 
 	// Somewhat long, thus it is its own kernel rather than being part of 
@@ -709,7 +718,9 @@ void BACKWARD::preprocess(
 		dL_dcov3D,
 		mask,
 		point_index,
-		point_batch_index);
+		point_batch_index,
+		low_pass
+	);
 	ERROR_CHECK
 
 	// Propagate gradients for remaining steps: finish 3D mean gradients,

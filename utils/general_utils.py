@@ -184,3 +184,7 @@ def draw_graph(k, k_label):
     plt.close(fig)
     
     return image_array.transpose(2,0,1)
+
+def compute_pts_func(_B, _S, _N, D):
+    _Q = (_S - _B) / (_N ** D)
+    return lambda x: int(_Q * (_N - x) ** D + _B)

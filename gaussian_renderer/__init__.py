@@ -14,8 +14,8 @@ import math
 from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
-
-def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, mask=None, normalize_grad2D=False):
+FOV_WARN = False
+def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, mask=None, normalize_grad2D=False, low_pass=0.3, separate_batch=False):
     """
     Render the scene. 
     
@@ -23,26 +23,22 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
     """
  
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
-    screenspace_points = torch.zeros((pc.get_xyz.shape[0], 4), dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
+    screenspace_points = torch.zeros((pc.get_xyz.shape[0], 2), dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
     try:
         screenspace_points.retain_grad()
     except:
         pass
     if type(viewpoint_cameras) is not list:
         viewpoint_cameras = [viewpoint_cameras]
-    if len(viewpoint_cameras) >= 2:
-        assert viewpoint_cameras[0].image_height == viewpoint_cameras[1].image_height
-        assert math.tan(viewpoint_cameras[0].FoVx * 0.5) == math.tan(viewpoint_cameras[1].FoVx * 0.5)
-
 
     # Set up rasterization configuration
-    tanfovx = math.tan(viewpoint_cameras[0].FoVx * 0.5)
-    tanfovy = math.tan(viewpoint_cameras[0].FoVy * 0.5)
     image_height = int(viewpoint_cameras[0].image_height)
     image_width = int(viewpoint_cameras[0].image_width)
     viewmatrix = torch.stack([cam.world_view_transform for cam in viewpoint_cameras])
     projmatrix = torch.stack([cam.full_proj_transform for cam in viewpoint_cameras])
     campos = torch.stack([cam.camera_center for cam in viewpoint_cameras])
+    tanfovx = torch.tensor([math.tan(cam.FoVx * 0.5) for cam in viewpoint_cameras]).to(viewmatrix.device)
+    tanfovy = torch.tensor([math.tan(cam.FoVy * 0.5) for cam in viewpoint_cameras]).to(viewmatrix.device)
 
     if mask is None: 
         mask = torch.empty(0, dtype=torch.int32)
@@ -61,7 +57,9 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
         mask=mask,
         debug=pipe.debug,
         log_buffer=log_buffer,
-        normalize_grad2D=normalize_grad2D
+        normalize_grad2D=normalize_grad2D,
+        low_pass=low_pass,
+        separate_batch=separate_batch
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)

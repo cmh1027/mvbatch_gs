@@ -97,20 +97,3 @@ def _ssim(img1, img2, window, window_size, channel, mask=None):
     ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
 
     return ssim_map
-
-def get_lambda_dssim(opt, iteration):
-    if opt.lambda_dssim_init == opt.lambda_dssim_end:
-        return opt.lambda_dssim_init
-    u = opt.lambda_dssim_u
-    v = opt.lambda_dssim_v
-    assert u < v
-    l = iteration / opt.iterations
-    if l < u:
-        coef = 0
-    elif u <= l < v:
-        t = math.pi * (l - u) / (v - u)
-        coef = 0.5 * (1 - math.cos(t))
-    else:
-        coef = 1
-    return opt.lambda_dssim_init * (1-coef) + opt.lambda_dssim_end * coef
-

@@ -45,14 +45,15 @@ RasterizeGaussiansCUDA(
 	const float scale_modifier,
 	const torch::Tensor& viewmatrix,
 	const torch::Tensor& projmatrix,
-	const float tan_fovx, 
-	const float tan_fovy,
+	const torch::Tensor& tan_fovx, 
+	const torch::Tensor& tan_fovy,
     const int image_height,
     const int image_width,
 	const torch::Tensor& sh,
 	const int degree,
 	const torch::Tensor& campos,
 	torch::Tensor& mask,
+	const float low_pass,
 	const bool debug)
 {
 	if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
@@ -94,6 +95,9 @@ RasterizeGaussiansCUDA(
 	std::function<char*(size_t)> binningFunc = resizeFunctional(binningBuffer);
 	std::function<char*(size_t)> imgFunc = resizeFunctional(imgBuffer);
 
+	torch::Tensor focal_y = H / (2.0f * tan_fovy);
+	torch::Tensor focal_x = W / (2.0f * tan_fovx);
+
 	int rendered = 0;
 	int batch_rendered = 0;
 	if(P != 0)
@@ -122,13 +126,16 @@ RasterizeGaussiansCUDA(
 			viewmatrix.contiguous().data<float>(), 
 			projmatrix.contiguous().data<float>(),
 			campos.contiguous().data<float>(),
-			tan_fovx,
-			tan_fovy,
+			focal_x.contiguous().data<float>(),
+			focal_y.contiguous().data<float>(),
+			tan_fovx.contiguous().data<float>(),
+			tan_fovy.contiguous().data<float>(),
 			out_color.contiguous().data<float>(),
 			out_beta.contiguous().data<float>(),
 			out_depth.contiguous().data<float>(),
 			radii.contiguous().data<int>(),
 			mask.contiguous().data<int>(),
+			low_pass,
 			debug);
 		rendered = std::get<0>(returned);
 		batch_rendered = std::get<1>(returned);
@@ -136,7 +143,7 @@ RasterizeGaussiansCUDA(
 	return std::make_tuple(rendered, batch_rendered, out_color, out_beta, out_depth, radii, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansBackwardCUDA(
  	const torch::Tensor& background,
 	const torch::Tensor& means3D,
@@ -147,8 +154,8 @@ RasterizeGaussiansBackwardCUDA(
 	const float scale_modifier,
 	const torch::Tensor& viewmatrix,
     const torch::Tensor& projmatrix,
-	const float tan_fovx,
-	const float tan_fovy,
+	const torch::Tensor& tan_fovx,
+	const torch::Tensor& tan_fovy,
     const torch::Tensor& dL_dout_color,
 	const torch::Tensor& dL_dout_beta,
 	const torch::Tensor& dL_dout_depth,
@@ -163,12 +170,17 @@ RasterizeGaussiansBackwardCUDA(
 	const torch::Tensor& imageBuffer,
 	torch::Tensor& mask,
 	const bool normalize_grad2D,
+	const float low_pass,
+	const bool separate_batch,
 	const bool debug) 
 {
 	const int B = viewmatrix.size(0);
 	const int P = means3D.size(0);
 	const int H = dL_dout_color.size(1);
 	const int W = dL_dout_color.size(2);
+
+	torch::Tensor focal_y = H / (2.0f * tan_fovy);
+	torch::Tensor focal_x = W / (2.0f * tan_fovx);
 
 	int M = 0;
 	if(sh.size(0) != 0)
@@ -190,7 +202,9 @@ RasterizeGaussiansBackwardCUDA(
 	torch::Tensor dL_dbeta = torch::zeros({P, 1}, means3D.options());
 
 	torch::Tensor point_idx = torch::zeros({BR, 1}, means3D.options().dtype(torch::kInt32));
-	torch::Tensor dL_dmeans2D_sum = torch::zeros({P, 4}, means3D.options());
+	
+	torch::Tensor dL_dmeans2D_sum = torch::empty({0}, means3D.options());
+	torch::Tensor denom = torch::zeros({P, 1}, means3D.options());
 	if(BR != 0)
 	{  
 		CudaRasterizer::Rasterizer::backward(P, degree, M, B, R, BR,
@@ -205,8 +219,10 @@ RasterizeGaussiansBackwardCUDA(
 		viewmatrix.contiguous().data<float>(),
 		projmatrix.contiguous().data<float>(),
 		campos.contiguous().data<float>(),
-		tan_fovx,
-		tan_fovy,
+		focal_x.contiguous().data<float>(),
+		focal_y.contiguous().data<float>(),
+		tan_fovx.contiguous().data<float>(),
+		tan_fovy.contiguous().data<float>(),
 		radii.contiguous().data<int>(),
 		reinterpret_cast<char*>(cacheBuffer.contiguous().data_ptr()),
 		reinterpret_cast<char*>(geomBuffer.contiguous().data_ptr()),
@@ -229,13 +245,44 @@ RasterizeGaussiansBackwardCUDA(
 		mask.contiguous().data<int>(),
 		point_idx.contiguous().data<int>(),
 		normalize_grad2D,
+		low_pass,
 		debug);
 		
 		point_idx = point_idx.to(torch::kInt64);
+		denom.scatter_add_(
+			0, 
+			point_idx.expand({-1, 1}),
+			torch::ones_like(dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 1)}))
+		);
+		dL_dmeans2D_sum = torch::zeros({P, 4}, means3D.options());
 		dL_dmeans2D_sum.scatter_add_(0, point_idx.expand({-1, 4}), dL_dmeans2D);
+		if(separate_batch){
+			torch::Tensor dL_dmeans2D_noabs = torch::zeros({P, 1}, means3D.options());
+			torch::Tensor dL_dmeans2D_abs = torch::zeros({P, 1}, means3D.options());
+			dL_dmeans2D_noabs.scatter_add_(
+				0, 
+				point_idx.expand({-1, 1}), 
+				dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}).norm(2, -1, true)
+			);
+			dL_dmeans2D_abs.scatter_add_(
+				0, 
+				point_idx.expand({-1, 1}), 
+				dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(2, 4)}).norm(2, -1, true)
+			);
+			dL_dmeans2D_sum = torch::cat({
+				dL_dmeans2D_noabs,
+				dL_dmeans2D_abs
+			}, -1);
+		}
+		else{
+			dL_dmeans2D_sum = torch::cat({
+				dL_dmeans2D_sum.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}).norm(2, -1, true),
+				dL_dmeans2D_sum.index({torch::indexing::Slice(), torch::indexing::Slice(2, 4)}).norm(2, -1, true)
+			}, -1);
+		}
 	}
 
-  	return std::make_tuple(dL_dmeans2D_sum, dL_dopacity, dL_dmeans3D, dL_dsh, dL_dscales, dL_drotations, dL_dbeta);
+  	return std::make_tuple(dL_dmeans2D_sum, dL_dopacity, dL_dmeans3D, dL_dsh, dL_dscales, dL_drotations, dL_dbeta, denom);
 }
 
 torch::Tensor markVisible(

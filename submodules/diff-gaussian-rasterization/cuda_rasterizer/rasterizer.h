@@ -46,12 +46,16 @@ namespace CudaRasterizer
 			const float* viewmatrix,
 			const float* projmatrix,
 			const float* cam_pos,
-			const float tan_fovx, float tan_fovy,
+			const float* focal_x, 
+			const float* focal_y,
+			const float* tan_fovx, 
+			const float* tan_fovy,
 			float* out_color,
 			float* out_beta,
 			float* out_depth,
 			int* radii,
 			const int* mask,
+			const float low_pass,
 			bool debug = false);
 
 		static void backward(
@@ -67,7 +71,10 @@ namespace CudaRasterizer
 			const float* viewmatrix,
 			const float* projmatrix,
 			const float* campos,
-			const float tan_fovx, float tan_fovy,
+			const float* focal_x, 
+			const float* focal_y,
+			const float* tan_fovx, 
+			const float* tan_fovy,
 			const int* radii,
 			char* cache_buffer,
 			char* geom_buffer,
@@ -90,6 +97,7 @@ namespace CudaRasterizer
 			const int* mask,
 			int* point_idx,
 			bool normalize_grad2D,
+			const float low_pass,
 			bool debug);
 	};
 };

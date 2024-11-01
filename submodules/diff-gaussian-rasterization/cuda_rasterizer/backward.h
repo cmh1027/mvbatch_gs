@@ -59,8 +59,10 @@ namespace BACKWARD
 		const float* cov3Ds,
 		const float* view,
 		const float* proj,
-		const float focal_x, float focal_y,
-		const float tan_fovx, float tan_fovy,
+		const float* focal_x, 
+		const float* focal_y,
+		const float* tan_fovx, 
+		const float* tan_fovy,
 		const glm::vec3* campos,
 		const float4* dL_dmean2D,
 		const float* dL_dconics,
@@ -73,7 +75,8 @@ namespace BACKWARD
 		glm::vec4* dL_drot,
 		const int* mask,
 		const int* point_index,
-		const int* point_batch_index
+		const int* point_batch_index,
+		const float low_pass
 	);
 }
 

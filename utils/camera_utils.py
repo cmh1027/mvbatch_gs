@@ -14,21 +14,18 @@ import numpy as np
 from utils.general_utils import PILtoTorch
 from utils.graphics_utils import fov2focal
 from tqdm import tqdm
-WARNED = False
-
+import warnings
+warnings.formatwarning = lambda msg, *args, **kwargs: str(msg) + '\n'
 def loadCam(args, id, cam_info, resolution_scale):
-    orig_w, orig_h = cam_info.image.size
-
-    if args.resolution in [1, 2, 4, 8]:
+    orig_w, orig_h = cam_info.image.size 
+    if args.H != -1 and args.W != -1:
+        resolution = (args.W, args.H)
+    elif args.resolution in [1, 2, 4, 8]:
         resolution = round(orig_w/(resolution_scale * args.resolution)), round(orig_h/(resolution_scale * args.resolution))
     else:  # should be a type that converts to float
         if args.resolution == -1:
             if orig_w > 1600:
-                global WARNED
-                if not WARNED:
-                    print("[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.\n "
-                        "If this is not desired, please explicitly specify '--resolution/-r' as 1")
-                    WARNED = True
+                warnings.warn("Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K. If this is not desired, please explicitly specify '--resolution/-r' as 1")
                 global_down = orig_w / 1600
             else:
                 global_down = 1
