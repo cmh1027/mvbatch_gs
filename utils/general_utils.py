@@ -188,3 +188,16 @@ def draw_graph(k, k_label):
 def compute_pts_func(_B, _S, _N, D):
     _Q = (_S - _B) / (_N ** D)
     return lambda x: int(_Q * (_N - x) ** D + _B)
+
+def gaussian_kl_divergence(mu1, sigma1, mu2, sigma2):
+    sigma2_inv = torch.inverse(sigma2)
+
+    # Compute the KL divergence
+    term1 = (sigma2_inv @ sigma1).diagonal(offset=0, dim1=-2, dim2=-1).sum(dim=-1) # trace
+    term2 = (mu2 - mu1)[..., None, :] @ sigma2_inv @ (mu2 - mu1)[..., :, None]
+    term2 = term2.squeeze(dim=-1).squeeze(dim=-1)
+    term3 = mu1.shape[-1]
+    log_det_term = torch.log(torch.det(sigma2) / torch.det(sigma1))
+
+    kl_div = 0.5 * (term1 + term2 - term3 + log_det_term)
+    return kl_div

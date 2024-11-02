@@ -10,6 +10,7 @@
 #
 
 import torch
+import math
 from torch import nn
 import numpy as np
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix
@@ -58,6 +59,34 @@ class Camera(nn.Module):
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy, 
                                                      W=self.image_width, H=self.image_height).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
+        
+    def depth_map_to_3d(self, depth_map):
+        """
+        Convert a depth map to 3D coordinates using intrinsic camera parameters.
+
+        :param depth_map: 2D array of depth values (H x W)
+        :param intrinsic_matrix: Camera intrinsic matrix
+        :return: 3D coordinates array of shape (H, W, 3)
+        """
+        h, w = depth_map.shape
+        assert self.image_width == w and self.image_height == h, "Depth map shape does not match camera resolution"
+        fx = (self.image_width / 2) / math.tan(self.FoVx / 2)
+        fy = (self.image_height / 2) / math.tan(self.FoVy / 2)
+        cx = self.image_width / 2
+        cy = self.image_height / 2
+
+        # Create a grid of pixel coordinates
+        u, v = torch.meshgrid(torch.arange(h, device=depth_map.device), torch.arange(w, device=depth_map.device))
+        
+        # Compute 3D coordinates
+        X = (u - cx) * depth_map / fx
+        Y = (v - cy) * depth_map / fy
+        Z = depth_map
+
+        # Stack into a single (H, W, 3) array
+        points_3d = torch.stack((X, Y, Z), axis=-1)
+
+        return points_3d
     
 class MiniCam:
     def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform):

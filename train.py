@@ -181,6 +181,13 @@ def training(dataset, opt, pipe, args):
 			loss = (1.0 - opt.lambda_dssim) * Ll
 			if opt.lambda_dssim > 0:
 				loss += opt.lambda_dssim * (1 - ssim(image, gt_image)).mean()
+    
+		if opt.batch_sample_strategy == 'kl':
+			with torch.no_grad():
+				for i in range(len(cams)):
+					x = cams[i].depth_map_to_3d(depth[0])[collage_mask[0]==i]
+					scene.surface_mu[cam_idxs[i]] = x.mean(dim=0)
+					scene.surface_sigma[cam_idxs[i]] = x.T.cov()
 
 
 		loss = loss / len(cams)
