@@ -189,15 +189,24 @@ def compute_pts_func(_B, _S, _N, D):
     _Q = (_S - _B) / (_N ** D)
     return lambda x: int(_Q * (_N - x) ** D + _B)
 
-def gaussian_kl_divergence(mu1, sigma1, mu2, sigma2):
-    sigma2_inv = torch.inverse(sigma2)
 
-    # Compute the KL divergence
-    term1 = (sigma2_inv @ sigma1).diagonal(offset=0, dim1=-2, dim2=-1).sum(dim=-1) # trace
-    term2 = (mu2 - mu1)[..., None, :] @ sigma2_inv @ (mu2 - mu1)[..., :, None]
-    term2 = term2.squeeze(dim=-1).squeeze(dim=-1)
-    term3 = mu1.shape[-1]
-    log_det_term = torch.log(torch.det(sigma2) / torch.det(sigma1))
+def gmm_kl(src_mu, src_sigma, dst_mu, dst_sigma):
+    # src_mu (N, D, 3)
+    # src_sigma (N, D, 3, 3)
+    # dst_mu (N, D, 3)
+    # dst_sigma (N, D, 3, 3)
+    N, D, _ = src_mu.shape
+    src_mu = src_mu.view(N, D, 1, 1, 3)
+    dst_mu = dst_mu.view(1, 1, N, D, 3)
+    src_sigma = src_sigma.view(N, D, 1, 1, 3, 3)
+    dst_sigma = dst_sigma.view(1, 1, N, D, 3, 3)
+    
+    dst_sigma_inv = torch.inverse(dst_sigma) 
+    term1 = (dst_sigma_inv @ src_sigma).diagonal(offset=0, dim1=-2, dim2=-1).sum(dim=-1) # (N, D, N, D)
+    term2 = (dst_mu - src_mu)[..., None, :] @ dst_sigma_inv @ (dst_mu - src_mu)[..., :, None] # (N, D, N, D)
+    term2 = term2.squeeze(dim=-1).squeeze(dim=-1) # (N, D, N, D)
+    log_det_term = torch.log(torch.det(dst_sigma) / torch.det(src_sigma)) # (N, D, N, D)
 
-    kl_div = 0.5 * (term1 + term2 - term3 + log_det_term)
+    kl_arr = 0.5 * (term1 + term2 + log_det_term - 3) # (N, D, N, D)
+    kl_div = kl_arr.min(dim=-1).values.sum(dim=1) # (N, N)
     return kl_div

@@ -69,6 +69,8 @@ class ModelParams(ParamGroup):
         self.init_scale = 0.1
         self.load_iter = False
         self.camera_distance_type = "log" # ["linear", "log"]
+        self.KL_divide = 2
+        self.KL_recompute_interval = 1 
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

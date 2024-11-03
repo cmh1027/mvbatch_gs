@@ -76,17 +76,17 @@ class Camera(nn.Module):
         cy = self.image_height / 2
 
         # Create a grid of pixel coordinates
-        u, v = torch.meshgrid(torch.arange(h, device=depth_map.device), torch.arange(w, device=depth_map.device))
+        u, v = torch.meshgrid(torch.arange(h, device=depth_map.device), torch.arange(w, device=depth_map.device), indexing="ij")
         
         # Compute 3D coordinates
-        X = (u - cx) * depth_map / fx
-        Y = (v - cy) * depth_map / fy
+        X = (u - cx + 0.5) * depth_map / fx
+        Y = (v - cy + 0.5) * depth_map / fy
         Z = depth_map
 
-        # Stack into a single (H, W, 3) array
-        points_3d = torch.stack((X, Y, Z), axis=-1)
+        points_cam = torch.stack((X, Y, Z), axis=-1)
+        points_world = points_cam @ torch.tensor(self.R.T, device=points_cam.device).float() + self.camera_center
 
-        return points_3d
+        return points_world
     
 class MiniCam:
     def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform):

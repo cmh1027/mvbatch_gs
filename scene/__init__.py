@@ -21,7 +21,7 @@ from scene.gaussian_model import GaussianModel
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 from utils.graphics_utils import getWorld2View2
-from utils.general_utils import gaussian_kl_divergence
+from utils.general_utils import gmm_kl
 
 class Scene:
 
@@ -131,9 +131,9 @@ class Scene:
         self.TR_min_prob.fill_diagonal_(0.)
         self.TR_min_prob = self.TR_min_prob / self.TR_min_prob.sum(dim=1, keepdim=True)
         
-        self.surface_mu = torch.zeros((len(scene_info.train_cameras), 3), device='cuda')
-        self.surface_sigma = torch.zeros((len(scene_info.train_cameras), 3, 3), device='cuda')
-        self.surface_sigma[:] = torch.eye(3, device='cuda')
+        self.surface_mu = torch.zeros((len(scene_info.train_cameras), args.KL_divide**2, 3), device='cuda')
+        self.surface_sigma = torch.eye(3, device='cuda')[None, None, ...].repeat(len(scene_info.train_cameras), args.KL_divide**2, 1, 1)
+        self.kl_div = torch.rand((len(scene_info.train_cameras), len(scene_info.train_cameras)), device='cuda')
         
 
     def save(self, iteration):
@@ -163,38 +163,19 @@ class Scene:
             indices = indices[indices != idx][:N-1]
         elif strategy == "kl":
             indices = []
-            kl = gaussian_kl_divergence(self.surface_mu[:, None], self.surface_sigma[:, None], self.surface_mu[None, :], self.surface_sigma[None, :]) # (N, N)
-            
-            prob = kl.clamp(min=0) + 1e-6
-            
-            # prob = kl.clamp(min=0)
-            # # prob = torch.log(kl+torch.e)
-            # prob_ = prob.clone()
-            # prob_.fill_diagonal_(prob.amin())
-            # prob_max = prob_.amax(dim=1, keepdim=True)
-            # prob_.fill_diagonal_(prob.amax())
-            # prob_min = prob_.amin(dim=1, keepdim=True)
-            # prob = 1e-6 + (prob - prob_min) / (prob_max - prob_min + 1e-6)
-            
-            # prob = 1 - torch.exp(-kl) + 1e-6
-            # prob_ = prob.clone()
-            # prob_.fill_diagonal_(prob.amin())
-            # prob_max = prob_.amax(dim=1, keepdim=True)
-            # prob_.fill_diagonal_(prob.amax())
-            # prob_min = prob_.amin(dim=1, keepdim=True)
-            # prob = 1e-6 + (prob - prob_min) / (prob_max - prob_min + 1e-6)
-            # # prob = 0.5 + (1 - torch.exp(-kl))*0.5
-            # prob.fill_diagonal_(0)
-            
-            distance_vector_ = prob[idx].clone()
+            distance_vector_ = self.kl_div[idx]
             for _ in range(N-1):
                 sample_prob = distance_vector_ / distance_vector_.sum()
                 index = sample_prob.multinomial(num_samples=1).squeeze()
                 indices += [index.item()]
-                distance_vector_ = torch.minimum(distance_vector_, prob[index])
+                distance_vector_ = torch.minimum(distance_vector_, self.kl_div[index])
             indices = torch.tensor(indices, device=torch.device('cuda'))
         else:
             raise NotImplementedError
         selected = torch.cat([torch.tensor([idx], device=torch.device('cuda')), indices])
         return selected
+    
+    def compute_kldiv(self):
+        kl = gmm_kl(self.surface_mu, self.surface_sigma, self.surface_mu, self.surface_sigma)
+        self.kl_div = kl.clamp(min=0) + 1e-6
     

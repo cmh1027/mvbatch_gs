@@ -36,6 +36,7 @@ from metrics import evaluate
 from datetime import timedelta
 import time
 from diff_gaussian_rasterization import make_category_mask
+from math import ceil
 
 def training(dataset, opt, pipe, args):
 	saving_iterations = args.save_iterations
@@ -101,6 +102,9 @@ def training(dataset, opt, pipe, args):
 
 	start_time = time.time()
 	for iteration in range(first_iter, opt.iterations + 1): 
+		if opt.batch_sample_strategy == 'kl' and iteration % dataset.KL_recompute_interval == 0:
+			scene.compute_kldiv()
+
 		gt_images = []
 		if iteration == forced_exit:
 			print("FORCED EXIT")
@@ -185,10 +189,24 @@ def training(dataset, opt, pipe, args):
 		if opt.batch_sample_strategy == 'kl':
 			with torch.no_grad():
 				for i in range(len(cams)):
-					x = cams[i].depth_map_to_3d(depth[0])[collage_mask[0]==i]
-					scene.surface_mu[cam_idxs[i]] = x.mean(dim=0)
-					scene.surface_sigma[cam_idxs[i]] = x.T.cov()
-
+					_D = dataset.KL_divide
+					pad_H, pad_W = ceil(H/_D)*_D, ceil(W/_D)*_D
+					PH, PW = pad_H // _D, pad_W // _D
+					unprojected_pts_pad = torch.zeros((3, pad_H, pad_W), device='cuda')
+					mask_pad = torch.zeros((1, pad_H, pad_W), device='cuda')
+					unprojected_pts_pad[:, :H, :W] = cams[i].depth_map_to_3d(depth[0]).permute(2, 0, 1) # (3, H, W)
+					mask_pad[:, :H, :W] = (collage_mask[0]==i).unsqueeze(0) # (1, H, W)
+					unprojected_pts_pad = unprojected_pts_pad.unfold(dimension=1, size=PH, step=PH).unfold(dimension=2, size=PW, step=PW).reshape(3, _D**2, -1) # (3,D^2,PH*PW)
+					mask_pad = mask_pad.unfold(dimension=1, size=PH, step=PH).unfold(dimension=2, size=PW, step=PW).reshape(1, _D**2, -1) # (1,D^2,PH*PW)
+					sq_mean = (unprojected_pts_pad * unprojected_pts_pad * mask_pad).sum(dim=-1) / mask_pad.sum(dim=-1) # (3,D^2) (E[x^2], E[y^2], E[z^2]
+					sq_cross_mean = (unprojected_pts_pad * unprojected_pts_pad.roll(shifts=-1, dims=0) * mask_pad).sum(dim=-1) / mask_pad.sum(dim=-1) # (3,D^2) (E[xy], E[yz], E[zx])
+					mean = (unprojected_pts_pad * mask_pad).sum(dim=-1) / mask_pad.sum(dim=-1) # (3,D^2) (E[x], E[y], E[z])
+					mean_sq = mean ** 2 # (E[x]^2, E[y]^2, E[z]^2)
+					mean_cross = mean * mean.roll(shifts=-1, dims=0) # (E[x]E[y], E[y]E[z], E[z]E[x])
+					v_x, v_y, v_z = (sq_mean - mean_sq).unbind(dim=0)
+					cov_xy, cov_yz, cov_zx = (sq_cross_mean - mean_cross).unbind(dim=0)
+					scene.surface_mu[cam_idxs[i]] = mean.permute(1, 0)
+					scene.surface_sigma[cam_idxs[i]] = torch.stack([v_x, cov_xy, cov_zx, cov_xy, v_y, cov_yz, cov_zx, cov_yz, v_z], dim=-1).reshape(_D**2, 3, 3)
 
 		loss = loss / len(cams)
 		if not opt.evaluate_time and iteration % 10 == 0:
