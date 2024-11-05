@@ -491,7 +491,6 @@ class GaussianModel:
             tb_writer.add_histogram("split/opacity", self.get_opacity[idx.unique()][..., 0], iteration)
             tb_writer.add_histogram("split/scale_norm", self.get_scaling[idx.unique()].norm(dim=-1), iteration)
             tb_writer.add_histogram("split/scale_max", self.get_scaling[idx.unique()].max(dim=-1).values, iteration)
-            tb_writer.add_histogram("split/beta", self.get_beta[idx.unique()][..., 0], iteration)
         (
             new_xyz, 
             new_features_dc,
@@ -574,7 +573,10 @@ class GaussianModel:
         grads_abs = self.xyz_gradient_accum_abs / self.denom
         grads_abs[grads_abs.isnan()] = 0.0
         self.densify_and_clone(grads, opt, extent, int(add_pts_count * opt.clone_ratio))
-        self.densify_and_split(grads_abs, opt, extent, int(add_pts_count * opt.split_ratio))
+        if opt.no_abs_grad:
+            self.densify_and_split(grads, opt, extent, int(add_pts_count * opt.split_ratio))
+        else:
+            self.densify_and_split(grads_abs, opt, extent, int(add_pts_count * opt.split_ratio))
         prune_mask = (self.get_opacity < min_opacity).squeeze()
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size

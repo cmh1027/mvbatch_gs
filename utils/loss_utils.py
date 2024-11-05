@@ -21,28 +21,10 @@ loss_dict = {
     "l2" : lambda x1, x2: (x1 - x2) ** 2
 }
 
-beta_dict = {
-    "l1" : lambda beta: beta,
-    "l2" : lambda beta: beta ** 2
-}
-
-beta_reg_dict = {
-    "l1" : lambda beta: torch.log(beta) + 3,
-    "l2" : lambda beta: 2 * (torch.log(beta) + 3)
-}
 
 
-
-def pixel_loss(pred, gt, beta=None, ltype="l1", beta_ltype="l1", detach=False):
+def pixel_loss(pred, gt, ltype="l1"):
     loss = loss_dict[ltype](pred, gt).view(3, -1)
-    if beta is not None:
-        assert torch.all(beta > 0)
-        loss = loss.mean(dim=0)
-        beta = beta.flatten()
-        if detach:
-            loss = loss + loss.detach() / beta_dict[beta_ltype](beta) + beta_reg_dict[beta_ltype](beta)
-        else:
-            loss = loss / beta_dict[beta_ltype](beta) + beta_reg_dict[beta_ltype](beta)
     return loss.mean()
 
 def gaussian(window_size, sigma):

@@ -110,31 +110,25 @@ class Scene:
         if args.camera_distance_type == "log":
             R_distance_max = (-torch.log((R_max - R_distance) / R_max + 1e-6)).clamp_(min=0)
             T_distance_max = (-torch.log((T_max - T_distance) / T_max + 1e-6)).clamp_(min=0)
-            R_distance_min = (-torch.log((R_distance) / R_max + 1e-6)).clamp_(min=0)
-            T_distance_min = (-torch.log((T_distance) / T_max + 1e-6)).clamp_(min=0)
         elif args.camera_distance_type == "linear":
             R_distance_max = R_distance / R_max 
             T_distance_max = T_distance / T_max
-            R_distance_min = (R_max-R_distance) / R_max 
-            T_distance_min = (T_max-T_distance) / T_max
         else:
             raise NotImplementedError
 
         t_coef, r_coef = args.t_coef / (args.t_coef + args.r_coef), args.r_coef / (args.t_coef + args.r_coef)
-        TR_distance_min = t_coef * T_distance_min + r_coef * R_distance_min
         TR_distance_max = t_coef * T_distance_max + r_coef * R_distance_max
         self.TR_max_prob = TR_distance_max.clone().cuda()
-        self.TR_min_prob = TR_distance_min.clone().cuda()
 
         self.TR_max_prob.fill_diagonal_(0.)
         self.TR_max_prob = self.TR_max_prob / self.TR_max_prob.sum(dim=1, keepdim=True)
-        self.TR_min_prob.fill_diagonal_(0.)
-        self.TR_min_prob = self.TR_min_prob / self.TR_min_prob.sum(dim=1, keepdim=True)
         
         self.surface_mu = torch.zeros((len(scene_info.train_cameras), args.KL_divide**2, 3), device='cuda')
         self.surface_sigma = torch.eye(3, device='cuda')[None, None, ...].repeat(len(scene_info.train_cameras), args.KL_divide**2, 1, 1)
         self.kl_div = torch.rand((len(scene_info.train_cameras), len(scene_info.train_cameras)), device='cuda')
         
+        self.sampled_count = torch.zeros(len(scene_info.train_cameras), device='cuda')
+        self.sampled_count += 1e-6 * torch.rand_like(self.sampled_count)
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
@@ -146,13 +140,11 @@ class Scene:
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]
 
-    def sample_cameras(self, idx, N=2, strategy="min"):
-        if strategy == "min":
-            indices = self.TR_min_prob[idx].multinomial(num_samples=N-1)
-        elif strategy == "max":
+    def sample_cameras(self, idx, N=2, strategy="max"):
+        if strategy == "max":
             indices = []
             distance_vector = self.TR_max_prob[idx].clone()
-            for _ in range(N-1):
+            for _ in range(N-1):  
                 index = distance_vector.multinomial(num_samples=1).squeeze()
                 indices += [index.item()]
                 distance_vector = torch.minimum(distance_vector, self.TR_max_prob[index])
@@ -173,6 +165,7 @@ class Scene:
         else:
             raise NotImplementedError
         selected = torch.cat([torch.tensor([idx], device=torch.device('cuda')), indices])
+        self.sampled_count[selected] += 1
         return selected
     
     def compute_kldiv(self):

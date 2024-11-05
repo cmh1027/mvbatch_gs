@@ -12,7 +12,6 @@
 import os
 import json
 import torch
-import torch.nn.functional as F
 from random import randint
 from utils.loss_utils import pixel_loss, ssim
 from lpipsPyTorch import lpips
@@ -121,15 +120,18 @@ def training(dataset, opt, pipe, args):
 
 		# Pick a random Camera
 		viewpoints = scene.getTrainCameras().copy()
-		if not viewpoint_stack:
-			viewpoint_stack = list(range(len(scene.getTrainCameras())))
-
-		cam_idx = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
+		if not opt.batch_sample_count:
+			if not viewpoint_stack:
+				viewpoint_stack = list(range(len(scene.getTrainCameras())))
+			cam_idx = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
+		else:
+			cam_idx = scene.sampled_count.argmin()
 
 		if opt.batch_size == 1:
 			cam_idxs = torch.tensor([cam_idx], device=torch.device('cuda'))
 		else:
 			cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, strategy=opt.batch_sample_strategy)
+
 		cam_idxs.clamp_(max=len(viewpoints)-1)
 		cams = [viewpoints[idx] for idx in cam_idxs]
 
@@ -153,7 +155,7 @@ def training(dataset, opt, pipe, args):
 		kwargs = {
 			"mask" : pmask,
 			"low_pass" : args.low_pass,
-			"separate_batch" : opt.separate_batch
+			"separate_batch" : not opt.no_separate_batch
 		} 
 		render_pkg = render(cams, gaussians, pipe, bg, **kwargs)
 
@@ -165,23 +167,22 @@ def training(dataset, opt, pipe, args):
 			render_pkg["radii"],
 			render_pkg["log_buffer"]
 		)
-		beta = render_pkg["beta"] + opt.beta_min if opt.use_beta else None
 
 		if len(cams) > 1:
 			gt_images = torch.stack([cam.original_image.cuda() for cam in cams])
 			collage_mask = make_category_mask(pmask, H, W, opt.batch_size).to(torch.int64)
 			collage_mask = collage_mask.unsqueeze(0).repeat(3,1,1)
 			collage_gt = torch.gather(gt_images, 0, collage_mask.unsqueeze(0)).squeeze(0)
-			Ll = pixel_loss(image, collage_gt, beta=beta, ltype=opt.loss_type, beta_ltype=opt.beta_loss_type, detach=opt.beta_detach)
+			Ll = pixel_loss(image, collage_gt, ltype=opt.loss_type)
 			loss = (1.0 - opt.lambda_dssim) * Ll
 			if opt.lambda_dssim > 0:
 				for i in range(len(cams)):
 					collage_mask_partial = torch.where(collage_mask[0:1] == i, 1., 0.)
 					ssim_map = ssim(image, collage_gt, mask=collage_mask_partial, mask_size=opt.mask_width)
-					loss += opt.lambda_dssim * (1 - ssim_map).mean()
+					loss += opt.lambda_dssim * (1 - ssim_map).mean() / len(cams)
 		else:
 			gt_image = cams[0].original_image
-			Ll = pixel_loss(image, gt_image, beta=beta, ltype=opt.loss_type, beta_ltype=opt.beta_loss_type, detach=opt.beta_detach)
+			Ll = pixel_loss(image, gt_image, ltype=opt.loss_type)
 			loss = (1.0 - opt.lambda_dssim) * Ll
 			if opt.lambda_dssim > 0:
 				loss += opt.lambda_dssim * (1 - ssim(image, gt_image)).mean()
@@ -208,9 +209,6 @@ def training(dataset, opt, pipe, args):
 					scene.surface_mu[cam_idxs[i]] = mean.permute(1, 0)
 					scene.surface_sigma[cam_idxs[i]] = torch.stack([v_x, cov_xy, cov_zx, cov_xy, v_y, cov_yz, cov_zx, cov_yz, v_z], dim=-1).reshape(_D**2, 3, 3)
 
-		loss = loss / len(cams)
-		if not opt.evaluate_time and iteration % 10 == 0:
-			tb_writer.add_scalar('train/loss', loss, iteration)
 		loss.backward()
 		#########################
 
@@ -223,9 +221,6 @@ def training(dataset, opt, pipe, args):
 				tb_writer.add_scalar(f'train/num_points', len(gaussians._xyz), iteration)
 				tb_writer.add_scalar(f'train/R', log_buffer["R"], iteration)
 				tb_writer.add_scalar(f'train/BR', log_buffer["BR"], iteration)
-				if opt.use_beta:
-					tb_writer.add_scalar(f'train/beta_min', beta.min(), iteration)
-					tb_writer.add_scalar(f'train/beta_max', beta.max(), iteration)
 
 		reg_loss = torch.tensor(0., requires_grad=True)
 
@@ -303,9 +298,8 @@ def training(dataset, opt, pipe, args):
 					image = render_pkg["render"][:3, ...]
 					depth = render_pkg["depth"] 
 					gt_image = viewpoints[cam_idx].original_image
-					l1_map = torch.abs(image-gt_image).mean(dim=0, keepdim=True)
-					aux_map = l1_map if opt.use_beta else depth
-					beta_map = render_pkg["beta"] if opt.use_beta else torch.zeros_like(depth)
+					aux_map = depth
+					beta_map = torch.zeros_like(depth)
 					pred = torch.cat([image, apply_depth_colormap(aux_map.permute(1, 2, 0))], dim=-1)
 					gt = torch.cat([gt_image, apply_depth_colormap(beta_map.permute(1, 2, 0))], dim=-1)
 					figs = [pred, gt]
@@ -434,13 +428,6 @@ def training_report(opt, tb_writer, iteration, Ll, loss, testing_iterations, sce
 							tb_writer.add_scalar('test' + '/loss_viewpoint - pcoef_freq_low', pcoef_low_freq_test, iteration)
 							tb_writer.add_scalar('test' + '/loss_viewpoint - pcoef_freq_high', pcoef_high_freq_test, iteration)
 						tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
-						if opt.use_beta:
-							tb_writer.add_histogram("scene/beta_histogram", scene.gaussians.get_beta, iteration)
-							tb_writer.add_image(
-								'scene/opacity-beta', 
-								draw_two_graphs(scene.gaussians.get_opacity, scene.gaussians.get_beta, "opacity", "beta"), 
-								global_step=iteration
-							)
 
 					torch.cuda.empty_cache()
 
@@ -472,6 +459,8 @@ if __name__ == "__main__":
 	parser.add_argument("--override_degree_mcmc", type=float)
 	parser.add_argument("--batch_size_decrease_interval", nargs="+", type=int)
 	parser.add_argument("--low_pass", default=0.3, type=float)
+	parser.add_argument("--benchmark", action="store_true")
+
 	args = parser.parse_args(sys.argv[1:])
 	if args.config is not None:
 		# Load the configuration file
@@ -491,7 +480,7 @@ if __name__ == "__main__":
 	print("Optimizing " + args.model_path)
 
 	# Initialize system state (RNG)
-	safe_state(args.quiet)
+	safe_state(args.quiet, args.benchmark)
 
 	# Start GUI server, configure and run training
 	# network_gui.init(args.ip, args.port)
@@ -500,4 +489,4 @@ if __name__ == "__main__":
 	render_iter = op.iterations if args.render_iter is None else args.render_iter
 	if args.forced_exit is None:
 		render_sets(lp.extract(args), render_iter, pp.extract(args), True, False, low_pass=args.low_pass)
-		evaluate([args.model_path])
+		evaluate([args.model_path]) 

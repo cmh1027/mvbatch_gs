@@ -99,7 +99,6 @@ class OptimizationParams(ParamGroup):
         self.beta_lr = 0.0025
         self.percent_dense = 0.01
         self.loss_type = "l1"
-        self.beta_loss_type = "l1"
 
         self.lambda_dssim = 0.2
 
@@ -115,21 +114,19 @@ class OptimizationParams(ParamGroup):
         self.densify_grad_abs_threshold = 0.0004
         self.modulate_densify_grad = 1.
         self.normalize_grad2D = False
-        self.separate_batch = False
+        self.no_separate_batch = False
         self.split_ratio = 3/23
         self.clone_ratio = 20/23
+        self.no_abs_grad = False
 
         ### 3dgs-mcmc ###
         self.add_ratio = 0.05
         self.noise_lr = 5e5
         self.scale_reg = 0.01
         self.opacity_reg = 0.01
-        self.prob_type = "opacity" # ["opacity", "beta", "both"]
-        self.sample_opacity_threshold = 1.0
-        self.sample_opacity_prune = "bigger"
-        self.sample_beta_threshold = 1.0
         
-        self.batch_sample_strategy = "max" # ["min", "max", "random"]
+        self.batch_sample_strategy = "max" # ["max", "random"]
+        self.batch_sample_count = False
         self.batch_size = 1
         self.batch_until = -1
         self.mask_height = 32
@@ -143,10 +140,6 @@ class OptimizationParams(ParamGroup):
 
         self.evaluate_time = False
         self.gs_type = "mcmc" # ["original", "mcmc"]
-
-        self.use_beta = False
-        self.beta_detach = False
-        self.beta_min = 0.1
 
         self.predictable_growth = False
         self.predictable_growth_degree = 2.0
