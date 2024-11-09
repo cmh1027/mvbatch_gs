@@ -15,7 +15,7 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 FOV_WARN = False
-def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, mask=None, normalize_grad2D=False, low_pass=0.3, separate_batch=False):
+def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, mask=None, normalize_grad2D=False, low_pass=0.3, separate_batch=False, split_by_std=False):
     """
     Render the scene. 
     
@@ -59,7 +59,7 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
         log_buffer=log_buffer,
         normalize_grad2D=normalize_grad2D,
         low_pass=low_pass,
-        separate_batch=separate_batch
+        split_by_std=split_by_std
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
@@ -70,24 +70,22 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
     scales = pc.get_scaling
     rotations = pc.get_rotation
     shs = pc.get_features
-    betas = pc.get_beta
 
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
-    rendered_image, rendered_beta, radii, depth = rasterizer(
+    rendered_image, radii, depth, residual_trans = rasterizer(
         means3D = means3D,
         means2D = means2D,
         shs = shs,
         opacities = opacity,
         scales = scales,
-        rotations = rotations,
-        betas = betas)
+        rotations = rotations)
     return_dict =  {"render": rendered_image,
-                    "beta": rendered_beta,
                     "viewspace_points": screenspace_points,
                     "visibility_filter" : radii > 0,
                     "radii": radii,
                     "depth": depth,
+                    "residual_trans": residual_trans,
                     "log_buffer": log_buffer}
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.

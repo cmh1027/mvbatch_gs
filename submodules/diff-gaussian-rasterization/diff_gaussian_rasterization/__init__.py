@@ -25,7 +25,6 @@ def rasterize_gaussians(
     opacities,
     scales,
     rotations,
-    betas,
     raster_settings,
 ):
     return _RasterizeGaussians.apply(
@@ -35,7 +34,6 @@ def rasterize_gaussians(
         opacities,
         scales,
         rotations,
-        betas,
         raster_settings,
     )
 
@@ -49,7 +47,6 @@ class _RasterizeGaussians(torch.autograd.Function):
         opacities,
         scales,
         rotations,
-        betas,
         raster_settings,
     ):
 
@@ -60,7 +57,6 @@ class _RasterizeGaussians(torch.autograd.Function):
             opacities,
             scales,
             rotations,
-            betas,
             raster_settings.scale_modifier,
             raster_settings.viewmatrix,
             raster_settings.projmatrix,
@@ -76,7 +72,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.debug
         )
         
-        num_rendered, batch_num_rendered, rendered_color, rendered_beta, rendered_depth, radii, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask = _C.rasterize_gaussians(*args)
+        num_rendered, batch_num_rendered, rendered_color, rendered_depth, residual_trans, radii, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask = _C.rasterize_gaussians(*args)
 
         raster_settings.log_buffer["R"] = num_rendered
         raster_settings.log_buffer["BR"] = batch_num_rendered
@@ -84,18 +80,18 @@ class _RasterizeGaussians(torch.autograd.Function):
         ctx.raster_settings = raster_settings
         ctx.num_rendered = num_rendered
         ctx.batch_num_rendered = batch_num_rendered
-        ctx.save_for_backward(means3D, scales, rotations, betas, radii, sh, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask)
+        ctx.save_for_backward(means3D, scales, rotations, radii, sh, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask)
         radii = radii.max(dim=0).values # (B, N) => (N,)
-        return rendered_color, rendered_beta, radii, rendered_depth
+        return rendered_color, radii, rendered_depth, residual_trans
 
     @staticmethod
-    def backward(ctx, grad_out_color, grad_out_beta, grad_radii, grad_depth):
+    def backward(ctx, grad_out_color, grad_radii, grad_depth, grad_trans):
 
         # Restore necessary values from context
         num_rendered = ctx.num_rendered
         batch_num_rendered = ctx.batch_num_rendered
         raster_settings = ctx.raster_settings
-        means3D, scales, rotations, betas, radii, sh, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask = ctx.saved_tensors
+        means3D, scales, rotations, radii, sh, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask = ctx.saved_tensors
         
         # Restructure args as C++ method expects them
         args = (raster_settings.bg,
@@ -103,15 +99,14 @@ class _RasterizeGaussians(torch.autograd.Function):
                 radii, 
                 scales, 
                 rotations, 
-                betas,
                 raster_settings.scale_modifier, 
                 raster_settings.viewmatrix, 
                 raster_settings.projmatrix, 
                 raster_settings.tanfovx, 
                 raster_settings.tanfovy, 
                 grad_out_color,
-                grad_out_beta,
                 grad_depth,
+                grad_trans,
                 sh, 
                 raster_settings.sh_degree, 
                 raster_settings.campos,
@@ -124,10 +119,10 @@ class _RasterizeGaussians(torch.autograd.Function):
                 mask,
                 raster_settings.normalize_grad2D,
                 raster_settings.low_pass,
-                raster_settings.separate_batch,
+                raster_settings.split_by_std,
                 raster_settings.debug)
 
-        grad_means2D, grad_opacities, grad_means3D, grad_sh, grad_scales, grad_rotations, grad_betas, denom = _C.rasterize_gaussians_backward(*args)
+        grad_means2D, grad_opacities, grad_means3D, grad_sh, grad_scales, grad_rotations, denom = _C.rasterize_gaussians_backward(*args)
         raster_settings.log_buffer["denom"] = denom
         grads = (
             grad_means3D,
@@ -136,7 +131,6 @@ class _RasterizeGaussians(torch.autograd.Function):
             grad_opacities,
             grad_scales,
             grad_rotations,
-            grad_betas,
             None,
         )
 
@@ -158,7 +152,7 @@ class GaussianRasterizationSettings(NamedTuple):
     low_pass : float
     log_buffer: dict
     normalize_grad2D : bool
-    separate_batch: bool
+    split_by_std: bool
 
 class GaussianRasterizer(nn.Module):
     def __init__(self, raster_settings):
@@ -176,7 +170,7 @@ class GaussianRasterizer(nn.Module):
             
         return visible
 
-    def forward(self, means3D, means2D, shs, opacities, scales, rotations, betas):
+    def forward(self, means3D, means2D, shs, opacities, scales, rotations):
         raster_settings = self.raster_settings
 
         # Invoke C++/CUDA rasterization routine
@@ -187,7 +181,6 @@ class GaussianRasterizer(nn.Module):
             opacities,
             scales, 
             rotations,
-            betas,
             raster_settings, 
         )
 

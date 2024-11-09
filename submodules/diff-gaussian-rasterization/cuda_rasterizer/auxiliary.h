@@ -130,6 +130,11 @@ __forceinline__ __device__ float4 dnormvdv(float4 v, float4 dv)
 	return dnormvdv;
 }
 
+__forceinline__ __device__ float square(float x)
+{
+	return x * x;
+}
+
 __forceinline__ __device__ float sigmoid(float x)
 {
 	return 1.0f / (1.0f + expf(-x));

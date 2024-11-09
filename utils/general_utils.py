@@ -211,3 +211,22 @@ def gmm_kl(src_mu, src_sigma, dst_mu, dst_sigma):
     kl_arr = 0.5 * (term1 + term2 + log_det_term - 3) # (N, D, N, D)
     kl_div = kl_arr.min(dim=-1).values.sum(dim=1) # (N, N)
     return kl_div
+
+def skewness(X):
+    """
+    X : (N, 1)
+    """
+    X = X.flatten()
+    mean = torch.mean(X)
+    std_dev = torch.std(X, unbiased=True)
+    N = X.shape[0]
+    return (torch.sum(((X - mean) ** 3) / N) / (std_dev ** 3)) ** (1/3)
+
+def _f(a, b, Na, Nb):
+    numer = Na * a - Nb * b + 3 * Nb * a + Na * b
+    denom = (a + b) * (Na + Nb)
+    return numer / denom
+
+def densify_coef(a, b, Na, Nb):
+    a, b = a - min(a, b) + 1, b - min(a, b) + 1
+    return _f(a, b, Na, Nb), _f(b, a, Nb, Na)

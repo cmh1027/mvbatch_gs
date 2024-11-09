@@ -7,7 +7,7 @@
 # under the terms of the LICENSE.md file.
 #
 # For inquiries contact  george.drettakis@inria.fr
-#
+# 
 
 from argparse import ArgumentParser, Namespace
 import sys
@@ -68,9 +68,6 @@ class ModelParams(ParamGroup):
         self.num_imgs = -1
         self.init_scale = 0.1
         self.load_iter = False
-        self.camera_distance_type = "log" # ["linear", "log"]
-        self.KL_divide = 2
-        self.KL_recompute_interval = 1 
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -109,24 +106,25 @@ class OptimizationParams(ParamGroup):
 
         ### 3dgs ###
         self.opacity_reset_interval = 3000
-        self.opacity_reset_threshold = 0.01
+        self.prune_threshold = 0.005
+        self.opacity_reset_value = 0.01
         self.densify_grad_threshold = 0.0002
         self.densify_grad_abs_threshold = 0.0004
         self.modulate_densify_grad = 1.
-        self.normalize_grad2D = False
-        self.no_separate_batch = False
-        self.split_ratio = 3/23
-        self.clone_ratio = 20/23
-        self.no_abs_grad = False
-
+        self.split_by_std = False
+        self.prune_interval = 100
+        self.prune_until = 25000
+        self.max_points = 6000000
+        self.denom = False
+        
         ### 3dgs-mcmc ###
         self.add_ratio = 0.05
         self.noise_lr = 5e5
         self.scale_reg = 0.01
         self.opacity_reg = 0.01
         
-        self.batch_sample_strategy = "max" # ["max", "random"]
-        self.batch_sample_count = False
+        self.batch_sample_strategy = "random" # ["max", "random"]
+        self.batch_sample_count = True
         self.batch_size = 1
         self.batch_until = -1
         self.mask_height = 32
@@ -136,15 +134,16 @@ class OptimizationParams(ParamGroup):
         self.only_psnr = False
         self.log_batch = False
         self.log_batch_interval = 1
-        self.log_densified_property = False
 
         self.evaluate_time = False
         self.gs_type = "mcmc" # ["original", "mcmc"]
 
         self.predictable_growth = False
-        self.predictable_growth_degree = 2.0
-        self.predictable_growth_degree_3dgs = 2.0
+        self.predictable_growth_degree = 5.0
+        self.predictable_growth_degree_3dgs = 5.0
         self.predictable_growth_degree_mcmc = 2.0
+
+        self.split_original = False
         
         super().__init__(parser, "Optimization Parameters")
 

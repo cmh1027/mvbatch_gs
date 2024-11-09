@@ -101,9 +101,6 @@ def training(dataset, opt, pipe, args):
 
 	start_time = time.time()
 	for iteration in range(first_iter, opt.iterations + 1): 
-		if opt.batch_sample_strategy == 'kl' and iteration % dataset.KL_recompute_interval == 0:
-			scene.compute_kldiv()
-
 		gt_images = []
 		if iteration == forced_exit:
 			print("FORCED EXIT")
@@ -120,12 +117,9 @@ def training(dataset, opt, pipe, args):
 
 		# Pick a random Camera
 		viewpoints = scene.getTrainCameras().copy()
-		if not opt.batch_sample_count:
-			if not viewpoint_stack:
-				viewpoint_stack = list(range(len(scene.getTrainCameras())))
-			cam_idx = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
-		else:
-			cam_idx = scene.sampled_count.argmin()
+		if not viewpoint_stack:
+			viewpoint_stack = list(range(len(scene.getTrainCameras())))
+		cam_idx = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
 
 		if opt.batch_size == 1:
 			cam_idxs = torch.tensor([cam_idx], device=torch.device('cuda'))
@@ -135,10 +129,8 @@ def training(dataset, opt, pipe, args):
 		cam_idxs.clamp_(max=len(viewpoints)-1)
 		cams = [viewpoints[idx] for idx in cam_idxs]
 
-		vis_ratios = []
-
 		bg = torch.rand((3), device="cuda") if opt.random_background else background
-		
+
 		if opt.grid_size == 1:
 			pmask = torch.sort(torch.rand(partial_height * partial_width, opt.mask_height * opt.mask_width, device=torch.device('cuda'))).indices.to(torch.int32)
 		else:
@@ -151,12 +143,11 @@ def training(dataset, opt, pipe, args):
 			x = torch.stack([x+i*opt.mask_width for i in range(opt.grid_size)], dim=-1)
 			pmask = x.reshape(partial_height * partial_width, -1).to(torch.int32)
 			
-
 		kwargs = {
 			"mask" : pmask,
-			"low_pass" : args.low_pass,
-			"separate_batch" : not opt.no_separate_batch
+			"split_by_std": opt.split_by_std
 		} 
+		
 		render_pkg = render(cams, gaussians, pipe, bg, **kwargs)
 
 		(image, depth, viewspace_point_tensor, visibility_filter, radii, log_buffer) = (
@@ -186,38 +177,11 @@ def training(dataset, opt, pipe, args):
 			loss = (1.0 - opt.lambda_dssim) * Ll
 			if opt.lambda_dssim > 0:
 				loss += opt.lambda_dssim * (1 - ssim(image, gt_image)).mean()
-    
-		if opt.batch_sample_strategy == 'kl':
-			with torch.no_grad():
-				for i in range(len(cams)):
-					_D = dataset.KL_divide
-					pad_H, pad_W = ceil(H/_D)*_D, ceil(W/_D)*_D
-					PH, PW = pad_H // _D, pad_W // _D
-					unprojected_pts_pad = torch.zeros((3, pad_H, pad_W), device='cuda')
-					mask_pad = torch.zeros((1, pad_H, pad_W), device='cuda')
-					unprojected_pts_pad[:, :H, :W] = cams[i].depth_map_to_3d(depth[0]).permute(2, 0, 1) # (3, H, W)
-					mask_pad[:, :H, :W] = (collage_mask[0]==i).unsqueeze(0) # (1, H, W)
-					unprojected_pts_pad = unprojected_pts_pad.unfold(dimension=1, size=PH, step=PH).unfold(dimension=2, size=PW, step=PW).reshape(3, _D**2, -1) # (3,D^2,PH*PW)
-					mask_pad = mask_pad.unfold(dimension=1, size=PH, step=PH).unfold(dimension=2, size=PW, step=PW).reshape(1, _D**2, -1) # (1,D^2,PH*PW)
-					sq_mean = (unprojected_pts_pad * unprojected_pts_pad * mask_pad).sum(dim=-1) / mask_pad.sum(dim=-1) # (3,D^2) (E[x^2], E[y^2], E[z^2]
-					sq_cross_mean = (unprojected_pts_pad * unprojected_pts_pad.roll(shifts=-1, dims=0) * mask_pad).sum(dim=-1) / mask_pad.sum(dim=-1) # (3,D^2) (E[xy], E[yz], E[zx])
-					mean = (unprojected_pts_pad * mask_pad).sum(dim=-1) / mask_pad.sum(dim=-1) # (3,D^2) (E[x], E[y], E[z])
-					mean_sq = mean ** 2 # (E[x]^2, E[y]^2, E[z]^2)
-					mean_cross = mean * mean.roll(shifts=-1, dims=0) # (E[x]E[y], E[y]E[z], E[z]E[x])
-					v_x, v_y, v_z = (sq_mean - mean_sq).unbind(dim=0)
-					cov_xy, cov_yz, cov_zx = (sq_cross_mean - mean_cross).unbind(dim=0)
-					scene.surface_mu[cam_idxs[i]] = mean.permute(1, 0)
-					scene.surface_sigma[cam_idxs[i]] = torch.stack([v_x, cov_xy, cov_zx, cov_xy, v_y, cov_yz, cov_zx, cov_yz, v_z], dim=-1).reshape(_D**2, 3, 3)
 
 		loss.backward()
 		#########################
-
 		if not opt.evaluate_time:
-			vis_ratios.append(((gaussians._opacity.grad != 0).sum() / len(gaussians._opacity)).item())
 			if iteration % 100 == 0:
-				visible_ratio = sum(vis_ratios) / len(vis_ratios)
-				vis_ratios = []
-				tb_writer.add_scalar(f'train/vis_ratio', visible_ratio, iteration)
 				tb_writer.add_scalar(f'train/num_points', len(gaussians._xyz), iteration)
 				tb_writer.add_scalar(f'train/R', log_buffer["R"], iteration)
 				tb_writer.add_scalar(f'train/BR', log_buffer["BR"], iteration)
@@ -255,10 +219,13 @@ def training(dataset, opt, pipe, args):
 				if opt.gs_type == "original":
 					mask = visibility_filter 
 					gaussians.max_radii2D[mask] = torch.max(gaussians.max_radii2D[mask], radii[mask])
-
 					vs = viewspace_point_tensor.grad[..., 0:1]
 					vs_abs = viewspace_point_tensor.grad[..., 1:2]
-					gaussians.add_densification_stats(vs, vs_abs, mask)
+					if opt.denom:
+						denom = log_buffer['denom']/len(cams)
+					else:
+						denom = visibility_filter[..., None]
+					gaussians.add_densification_stats(vs, vs_abs, mask, denom)
 
 				if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
 					dense_step = (iteration - from_iter) // opt.densification_interval
@@ -268,15 +235,16 @@ def training(dataset, opt, pipe, args):
 						size_threshold = 20 if iteration > opt.opacity_reset_interval else None
 						
 						pts_count = min(next_pts_count - gaussians.num_pts, gaussians.num_pts)
-						gaussians.densify_and_prune(tb_writer, opt, opt.opacity_reset_threshold / 2, scene.cameras_extent, size_threshold, iteration, pts_count)
+						gaussians.densify(tb_writer, opt, scene.cameras_extent, pts_count, iteration)
+						if iteration % opt.prune_interval == 0 and iteration <= opt.prune_until:
+							gaussians.prune(tb_writer, opt, opt.prune_threshold, scene.cameras_extent, size_threshold)
 
-						if (iteration - opt.densification_interval) % opt.opacity_reset_interval == 0:
-							from_iter = iteration
-							num_pts_func = compute_pts_func(dataset.cap_max, gaussians.num_pts, (opt.densify_until_iter - from_iter) // opt.densification_interval, opt.predictable_growth_degree)
-
+							if (iteration - opt.prune_interval) % opt.opacity_reset_interval == 0:
+								from_iter = iteration
+								num_pts_func = compute_pts_func(dataset.cap_max, gaussians.num_pts, (opt.densify_until_iter - from_iter) // opt.densification_interval, opt.predictable_growth_degree)
 
 					elif opt.gs_type == "mcmc":
-						dead_mask = (gaussians.get_opacity <= 0.005).squeeze(-1)
+						dead_mask = (gaussians.get_opacity <= opt.prune_threshold).squeeze(-1)
 						gaussians.relocate_gs(opt, dead_mask=dead_mask)
 						if not opt.evaluate_time:
 							tb_writer.add_scalar(f'train/dead_gaussians', dead_mask.sum().item(), iteration)
@@ -287,8 +255,8 @@ def training(dataset, opt, pipe, args):
 						gaussians.add_new_gs(opt, tb_writer, iteration=iteration, cap_max=args.cap_max, add_ratio=add_ratio)
 
 				if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
-					if opt.gs_type == "original":
-						gaussians.reset_opacity(opt.opacity_reset_threshold)
+					if opt.gs_type == "original" and iteration <= opt.prune_until:
+						gaussians.reset_opacity(opt.opacity_reset_value)
 
 
 			if iteration % args.vis_iteration_interval == 0 and not opt.evaluate_time:
@@ -332,6 +300,9 @@ def training(dataset, opt, pipe, args):
 				torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")           
 
 	end_time = time.time()
+	with open(os.path.join(dataset.model_path, "info.txt"), "w") as f:
+		f.write(f"num_points : {gaussians.num_pts}")
+
 	if opt.evaluate_time:
 		elasped_sec = end_time - start_time
 		with open(os.path.join(dataset.model_path, "elapsed.txt"), "w") as f:
@@ -490,3 +461,5 @@ if __name__ == "__main__":
 	if args.forced_exit is None:
 		render_sets(lp.extract(args), render_iter, pp.extract(args), True, False, low_pass=args.low_pass)
 		evaluate([args.model_path]) 
+
+

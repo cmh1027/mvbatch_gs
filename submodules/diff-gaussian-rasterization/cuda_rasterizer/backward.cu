@@ -460,18 +460,18 @@ renderCUDA(
 	const float2* __restrict__ points_xy_image,
 	const float4* __restrict__ conic_opacity,
 	const float* __restrict__ colors,
-	const float* __restrict__ betas,
 	const float* __restrict__ depths,
 	const float* __restrict__ final_Ts,
 	const uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ dL_dpixels,
-	const float* __restrict__ dL_dpixel_betas,
 	const float* __restrict__ dL_dpixel_depths,
+	const float* __restrict__ dL_dpixel_transs,
 	float4* __restrict__ dL_dmean2D,
+	float* __restrict__ dL_dmean2D_sq,
+	float* __restrict__ dL_dmean2D_N,
 	float4* __restrict__ dL_dconic2D,
 	float* __restrict__ dL_dopacity,
 	float* __restrict__ dL_dcolor,
-	float* __restrict__ dL_dbeta,
 	float* __restrict__ dL_ddepths,
 	const int* __restrict__ mask,
 	const int* __restrict__ point_index,
@@ -535,21 +535,19 @@ renderCUDA(
 
 	float accum_rec[C] = { 0 };
 	float dL_dpixel[C];
-	float dL_dpixel_beta;
 	float dL_dpixel_depth;
+	float dL_dpixel_trans;
 	float accum_depth_rec = 0;
-	float accum_beta_rec = 0;
 	if (inside){
 		for (int i = 0; i < C; i++)
 			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
-		dL_dpixel_beta = dL_dpixel_betas[pix_id];
 		dL_dpixel_depth = dL_dpixel_depths[pix_id];
+		dL_dpixel_trans = dL_dpixel_transs[pix_id];
 	}
 
 	float last_alpha = 0;
 	float last_color[C] = { 0 };
 	float last_depth = 0;
-	float last_beta = 0;
 
 	// Gradient of pixel coordinate w.r.t. normalized 
 	// screen-space viewport corrdinates (-1 to 1)
@@ -617,12 +615,6 @@ renderCUDA(
 				atomicAdd(&(dL_dcolor[global_id * C + ch]), alpha * T * dL_dchannel);
 			}
 
-			const float c_beta = betas[collected_id[j]];
-			accum_beta_rec = last_alpha * last_beta + (1.f - last_alpha) * accum_beta_rec;
-			last_beta = c_beta;
-			// dL_dalpha += (c_beta - accum_beta_rec) * dL_dpixel_beta;
-			atomicAdd(&(dL_dbeta[point_index[global_id]]), alpha * T * dL_dpixel_beta);
-
 			const float c_d = depths[collected_id[j]];
 			accum_depth_rec = last_alpha * last_depth + (1.f - last_alpha) * accum_depth_rec;
 			last_depth = c_d;
@@ -640,6 +632,9 @@ renderCUDA(
 				bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
 			dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
 
+			// Revising densficiation opacity reset
+			// dL_dalpha += (-T_final / (1.f - alpha)) * dL_dpixel_trans;
+
 
 			// Helpful reusable temporary variables
 			const float dL_dG = con_o.w * dL_dalpha;
@@ -653,6 +648,8 @@ renderCUDA(
 			atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely * ddely_dy);
 			atomicAdd(&dL_dmean2D[global_id].z, fabs(dL_dG * dG_ddelx * ddelx_dx));
 			atomicAdd(&dL_dmean2D[global_id].w, fabs(dL_dG * dG_ddely * ddely_dy));
+			atomicAdd(&dL_dmean2D_sq[global_id], square(dL_dG * dG_ddelx * ddelx_dx) + square(dL_dG * dG_ddely * ddely_dy));
+			atomicAdd(&dL_dmean2D_N[global_id], 1.0);
 
 
 			// Update gradients w.r.t. 2D covariance (2x2 matrix, symmetric)
@@ -761,18 +758,18 @@ void BACKWARD::render(
 	const float2* means2D,
 	const float4* conic_opacity,
 	const float* colors,
-	const float* betas,
 	const float* depths,
 	const float* final_Ts,
 	const uint32_t* n_contrib,
 	const float* dL_dpixels,
-	const float* dL_dpixels_beta,
 	const float* dL_dpixel_depths,
+	const float* dL_dpixel_trans,
 	float4* dL_dmean2D,
+	float* dL_dmean2D_sq,
+	float* dL_dmean2D_N,
 	float4* dL_dconic2D,
 	float* dL_dopacity,
 	float* dL_dcolor,
-	float* dL_dbeta,
 	float* dL_ddepths,
 	const int* mask,
 	const int* point_index,
@@ -781,29 +778,29 @@ void BACKWARD::render(
 	switch(B){
 		case 1:
 			renderCUDA<NUM_CHANNELS, 1> << <grid, block >> >(
-				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, betas, depths, final_Ts, n_contrib, 
-				dL_dpixels, dL_dpixels_beta, dL_dpixel_depths, dL_dmean2D, dL_dconic2D, dL_dopacity, dL_dcolor, dL_dbeta, dL_ddepths,
+				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, depths, final_Ts, n_contrib, 
+				dL_dpixels, dL_dpixel_depths, dL_dpixel_trans, dL_dmean2D, dL_dmean2D_sq, dL_dmean2D_N, dL_dconic2D, dL_dopacity, dL_dcolor, dL_ddepths,
 				mask, point_index, point_batch_index
 			);
 			break;
 		case 2:
 			renderCUDA<NUM_CHANNELS, 2> << <grid, block >> >(
-				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, betas, depths, final_Ts, n_contrib, 
-				dL_dpixels, dL_dpixels_beta, dL_dpixel_depths, dL_dmean2D, dL_dconic2D, dL_dopacity, dL_dcolor, dL_dbeta, dL_ddepths,
+				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, depths, final_Ts, n_contrib, 
+				dL_dpixels, dL_dpixel_depths, dL_dpixel_trans, dL_dmean2D, dL_dmean2D_sq, dL_dmean2D_N, dL_dconic2D, dL_dopacity, dL_dcolor, dL_ddepths,
 				mask, point_index, point_batch_index
 			);
 			break;
 		case 4:
 			renderCUDA<NUM_CHANNELS, 4> << <grid, block >> >(
-				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, betas, depths, final_Ts, n_contrib, 
-				dL_dpixels, dL_dpixels_beta, dL_dpixel_depths, dL_dmean2D, dL_dconic2D, dL_dopacity, dL_dcolor, dL_dbeta, dL_ddepths,
+				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, depths, final_Ts, n_contrib, 
+				dL_dpixels, dL_dpixel_depths, dL_dpixel_trans, dL_dmean2D, dL_dmean2D_sq, dL_dmean2D_N, dL_dconic2D, dL_dopacity, dL_dcolor, dL_ddepths,
 				mask, point_index, point_batch_index
 			);
 			break;
 		case 8:
 			renderCUDA<NUM_CHANNELS, 8> << <grid, block >> >(
-				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, betas, depths, final_Ts, n_contrib, 
-				dL_dpixels, dL_dpixels_beta, dL_dpixel_depths, dL_dmean2D, dL_dconic2D, dL_dopacity, dL_dcolor, dL_dbeta, dL_ddepths,
+				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, depths, final_Ts, n_contrib, 
+				dL_dpixels, dL_dpixel_depths, dL_dpixel_trans, dL_dmean2D, dL_dmean2D_sq, dL_dmean2D_N, dL_dconic2D, dL_dopacity, dL_dcolor, dL_ddepths,
 				mask, point_index, point_batch_index
 			);
 			break;

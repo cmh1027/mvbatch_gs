@@ -22,7 +22,6 @@ RasterizeGaussiansCUDA(
     const torch::Tensor& opacity,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
-	const torch::Tensor& betas,
 	const float scale_modifier,
 	const torch::Tensor& viewmatrix,
 	const torch::Tensor& projmatrix,
@@ -37,22 +36,21 @@ RasterizeGaussiansCUDA(
 	const float low_pass,
 	const bool debug);
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
  RasterizeGaussiansBackwardCUDA(
  	const torch::Tensor& background,
 	const torch::Tensor& means3D,
 	const torch::Tensor& radii,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
-	const torch::Tensor& betas,
 	const float scale_modifier,
 	const torch::Tensor& viewmatrix,
     const torch::Tensor& projmatrix,
 	const torch::Tensor& tan_fovx, 
 	const torch::Tensor& tan_fovy,
     const torch::Tensor& dL_dout_color,
-	const torch::Tensor& dL_dout_beta,
 	const torch::Tensor& dL_dout_depth,
+	const torch::Tensor& dL_dout_trans,
 	const torch::Tensor& sh,
 	const int degree,
 	const torch::Tensor& campos,
@@ -65,7 +63,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	torch::Tensor& mask,
 	const bool normalize_grad2D,
 	const float low_pass,
-	const bool separate_batch,
+	const bool split_by_std,
 	const bool debug);
 		
 torch::Tensor markVisible(

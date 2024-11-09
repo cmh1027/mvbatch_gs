@@ -87,49 +87,6 @@ class Scene:
         else:
             self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, init_scale=args.init_scale)
 
-        Rs, Ts = [], []
-        for cam in scene_info.train_cameras:
-            W2C = getWorld2View2(cam.R, cam.T)
-            C2W = np.linalg.inv(W2C)
-            Rs.append(cam.R[:3, :3])
-            Ts.append(C2W[:3, 3])
-        Rs = torch.from_numpy(np.stack(Rs)).float()
-        Ts = torch.from_numpy(np.stack(Ts)).float()
-        T_distance = torch.cdist(Ts, Ts) # (N, N)
-        R_distance = torch.zeros((len(Rs), len(Rs)))  # Initialize an NxN matrix to store distances # (N,N)
-        for i in range(len(Rs)):
-            for j in range(i+1, len(Rs)):
-                distance = (-torch.dot(Rs[i][..., 2], Rs[j][..., 2]) + 1) / 2 # [0, 1]
-                distance = (-torch.dot(Rs[i][..., 2], Rs[j][..., 2]) + 1) / 2 # [0, 1]
-                R_distance[i, j] = distance
-                R_distance[j, i] = distance
-        # 0 => 0
-        # MAX => inf
-        R_max = R_distance.max(dim=1, keepdim=True)[0]
-        T_max = T_distance.max(dim=1, keepdim=True)[0]
-        if args.camera_distance_type == "log":
-            R_distance_max = (-torch.log((R_max - R_distance) / R_max + 1e-6)).clamp_(min=0)
-            T_distance_max = (-torch.log((T_max - T_distance) / T_max + 1e-6)).clamp_(min=0)
-        elif args.camera_distance_type == "linear":
-            R_distance_max = R_distance / R_max 
-            T_distance_max = T_distance / T_max
-        else:
-            raise NotImplementedError
-
-        t_coef, r_coef = args.t_coef / (args.t_coef + args.r_coef), args.r_coef / (args.t_coef + args.r_coef)
-        TR_distance_max = t_coef * T_distance_max + r_coef * R_distance_max
-        self.TR_max_prob = TR_distance_max.clone().cuda()
-
-        self.TR_max_prob.fill_diagonal_(0.)
-        self.TR_max_prob = self.TR_max_prob / self.TR_max_prob.sum(dim=1, keepdim=True)
-        
-        self.surface_mu = torch.zeros((len(scene_info.train_cameras), args.KL_divide**2, 3), device='cuda')
-        self.surface_sigma = torch.eye(3, device='cuda')[None, None, ...].repeat(len(scene_info.train_cameras), args.KL_divide**2, 1, 1)
-        self.kl_div = torch.rand((len(scene_info.train_cameras), len(scene_info.train_cameras)), device='cuda')
-        
-        self.sampled_count = torch.zeros(len(scene_info.train_cameras), device='cuda')
-        self.sampled_count += 1e-6 * torch.rand_like(self.sampled_count)
-
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
         self.gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))
@@ -141,34 +98,7 @@ class Scene:
         return self.test_cameras[scale]
 
     def sample_cameras(self, idx, N=2, strategy="max"):
-        if strategy == "max":
-            indices = []
-            distance_vector = self.TR_max_prob[idx].clone()
-            for _ in range(N-1):  
-                index = distance_vector.multinomial(num_samples=1).squeeze()
-                indices += [index.item()]
-                distance_vector = torch.minimum(distance_vector, self.TR_max_prob[index])
-                distance_vector = distance_vector / distance_vector.sum()
-            indices = torch.tensor(indices, device=torch.device('cuda'))
-        elif strategy == "random":
-            indices = torch.randperm(self.TR_max_prob.shape[0], device=torch.device('cuda'))
-            indices = indices[indices != idx][:N-1]
-        elif strategy == "kl":
-            indices = []
-            distance_vector_ = self.kl_div[idx]
-            for _ in range(N-1):
-                sample_prob = distance_vector_ / distance_vector_.sum()
-                index = sample_prob.multinomial(num_samples=1).squeeze()
-                indices += [index.item()]
-                distance_vector_ = torch.minimum(distance_vector_, self.kl_div[index])
-            indices = torch.tensor(indices, device=torch.device('cuda'))
-        else:
-            raise NotImplementedError
+        indices = torch.randperm(self.TR_max_prob.shape[0], device=torch.device('cuda'))
+        indices = indices[indices != idx][:N-1]
         selected = torch.cat([torch.tensor([idx], device=torch.device('cuda')), indices])
-        self.sampled_count[selected] += 1
         return selected
-    
-    def compute_kldiv(self):
-        kl = gmm_kl(self.surface_mu, self.surface_sigma, self.surface_mu, self.surface_sigma)
-        self.kl_div = kl.clamp(min=0) + 1e-6
-    

@@ -1,7 +1,4 @@
 {
     "resolution": 1,
     "cap_max": 2600000,
-    "cap_max_3dgs": 4000000,
-    "predictable_growth_degree_3dgs": 5.0,
-    "predictable_growth_degree_mcmc": 3.0
 }

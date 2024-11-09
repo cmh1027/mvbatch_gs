@@ -19,7 +19,7 @@ from plyfile import PlyData, PlyElement
 from utils.sh_utils import RGB2SH
 from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
-from utils.general_utils import strip_symmetric, build_scaling_rotation
+from utils.general_utils import strip_symmetric, build_scaling_rotation, skewness, densify_coef
 from utils.reloc_utils import compute_relocation_cuda
 
 class GaussianModel:
@@ -487,10 +487,6 @@ class GaussianModel:
         probs = self.get_prob().squeeze(-1) 
         probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
         idx, ratio = self._sample_alives(probs=probs, num=num_gs)
-        if opt.log_densified_property:
-            tb_writer.add_histogram("split/opacity", self.get_opacity[idx.unique()][..., 0], iteration)
-            tb_writer.add_histogram("split/scale_norm", self.get_scaling[idx.unique()].norm(dim=-1), iteration)
-            tb_writer.add_histogram("split/scale_max", self.get_scaling[idx.unique()].max(dim=-1).values, iteration)
         (
             new_xyz, 
             new_features_dc,
@@ -516,21 +512,29 @@ class GaussianModel:
         self._opacity = optimizable_tensors["opacity"]
 
 
-    def densify_and_split(self, grads, opt, scene_extent, add_pts_count, N=2):
+    def split(self, grads, opt, scene_extent, add_pts_count, N=2):
         n_init_points = self.get_xyz.shape[0]
+        if add_pts_count <= 0 and opt.predictable_growth: return
         # Extract points that satisfy the gradient condition
         padded_grad = torch.zeros((n_init_points), device="cuda")
         padded_grad[:grads.shape[0]] = grads.squeeze()
-        
         if opt.predictable_growth:
             padded_grad[~(torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)] = 0.
-            selected_idx = torch.topk(padded_grad.squeeze(), min(add_pts_count, len(padded_grad))).indices
+            _, selected_idx = torch.topk(padded_grad.squeeze(), min(add_pts_count, len(padded_grad)))
             selected_pts_mask = torch.zeros_like(padded_grad).to(torch.bool)
             selected_pts_mask[selected_idx] = True
         else:
-            threshold = opt.densify_grad_abs_threshold
+            available = opt.max_points - self.get_xyz.shape[0]
+            if available <= 0: return
+            if opt.split_original:
+                threshold = opt.densify_grad_threshold
+            else:
+                threshold = opt.densify_grad_abs_threshold
             selected_pts_mask = torch.where(padded_grad >= threshold, True, False)
             selected_pts_mask = torch.logical_and(selected_pts_mask, torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
+            if available < selected_pts_mask.sum():
+                selected_pts_mask[selected_pts_mask.nonzero()[available:]] = False
+
         stds = self.get_scaling[selected_pts_mask].repeat(N,1)
         means = torch.zeros((stds.size(0), 3),device="cuda")
         samples = torch.normal(mean=means, std=stds)
@@ -543,21 +547,26 @@ class GaussianModel:
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
         new_beta = self._beta[selected_pts_mask].repeat(N,1)
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_beta)
-
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
 
-    def densify_and_clone(self, grads, opt, scene_extent, add_pts_count):
+    def clone(self, grads, opt, scene_extent, add_pts_count):
+        if add_pts_count <= 0 and opt.predictable_growth: return
         # Extract points that satisfy the gradient condition
         if opt.predictable_growth:
             grads[~(torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent)] = 0.
-            selected_idx = torch.topk(grads.squeeze(), min(add_pts_count, len(grads))).indices
+            _, selected_idx = torch.topk(grads.squeeze(), min(add_pts_count, len(grads)))
             selected_pts_mask = torch.zeros_like(grads.squeeze()).to(torch.bool)
             selected_pts_mask[selected_idx] = True
         else:
+            available = opt.max_points - self.get_xyz.shape[0]
+            if available <= 0: return
             threshold = opt.densify_grad_threshold
             selected_pts_mask = torch.where(grads.squeeze() >= threshold, True, False)
             selected_pts_mask = torch.logical_and(selected_pts_mask, torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent)
+            if available < selected_pts_mask.sum():
+                selected_pts_mask[selected_pts_mask.nonzero()[available:]] = False
+
         new_xyz = self._xyz[selected_pts_mask]
         new_features_dc = self._features_dc[selected_pts_mask]
         new_features_rest = self._features_rest[selected_pts_mask]
@@ -567,16 +576,27 @@ class GaussianModel:
         new_beta = self._beta[selected_pts_mask]
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_beta)
 
-    def densify_and_prune(self, tb_writer, opt, min_opacity, extent, max_screen_size, iteration, add_pts_count):
+    def densify(self, tb_writer, opt, extent, add_pts_count, iteration):
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
         grads_abs = self.xyz_gradient_accum_abs / self.denom
         grads_abs[grads_abs.isnan()] = 0.0
-        self.densify_and_clone(grads, opt, extent, int(add_pts_count * opt.clone_ratio))
-        if opt.no_abs_grad:
-            self.densify_and_split(grads, opt, extent, int(add_pts_count * opt.split_ratio))
+        
+        grad_clone = grads[torch.max(self.get_scaling, dim=1).values <= self.percent_dense*extent]
+        grad_split = grads_abs[torch.max(self.get_scaling, dim=1).values > self.percent_dense*extent]
+        clone_N, split_N = len(grad_clone), len(grad_split)
+
+        ratio = add_pts_count / self.num_pts
+        clone_add_count = int(clone_N * ratio)
+        split_add_count = int(split_N * ratio)
+        self.clone(grads, opt, extent, clone_add_count)
+        if opt.split_original:
+            self.split(grads, opt, extent, split_add_count)
         else:
-            self.densify_and_split(grads_abs, opt, extent, int(add_pts_count * opt.split_ratio))
+            self.split(grads_abs, opt, extent, split_add_count)
+        torch.cuda.empty_cache()
+
+    def prune(self, tb_writer, opt, min_opacity, extent, max_screen_size):
         prune_mask = (self.get_opacity < min_opacity).squeeze()
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
@@ -585,7 +605,8 @@ class GaussianModel:
         self.prune_points(prune_mask)
         torch.cuda.empty_cache()
 
-    def add_densification_stats(self, viewspace_point_tensor_grad, viewspace_point_tensor_abs_grad, update_filter, denom=None):
+
+    def add_densification_stats(self, viewspace_point_tensor_grad, viewspace_point_tensor_abs_grad, update_filter, denom):
         self.xyz_gradient_accum[update_filter] += viewspace_point_tensor_grad[update_filter]
         self.xyz_gradient_accum_abs[update_filter] += viewspace_point_tensor_abs_grad[update_filter]
-        self.denom[update_filter] += 1
+        self.denom[update_filter] += denom[update_filter]
