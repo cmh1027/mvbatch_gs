@@ -18,12 +18,10 @@ class FusedSSIMMap(torch.autograd.Function):
         img1, img2, mask, dm_dmu1, dm_dsigma1_sq, dm_dsigma12, denom_buffer = ctx.saved_tensors
         dL_dmap = opt_grad
         grad = fusedssim_backward(img1, img2, mask, dL_dmap, dm_dmu1, dm_dsigma1_sq, dm_dsigma12, denom_buffer)
-        return None, None, grad, None, None, None, None
+        return grad, None, None
 
 def fused_ssim(img1, img2, mask):
-    _, H, W = img1.shape
+    _, C, H, W = img1.shape
     if mask is None:
         mask = torch.ones(1, H, W, device=torch.device('cuda'))
-    img1 = img1 * mask
-    img2 = img2 * mask
     return FusedSSIMMap.apply(img1, img2, mask)

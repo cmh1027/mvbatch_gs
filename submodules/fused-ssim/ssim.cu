@@ -225,12 +225,24 @@ __global__ void fusedssimCUDA(
   const float* mask,
   float* denom_buffer,
   float* ssim_map,
-  float* dm_dmu1 = nullptr,
-  float* dm_dsigma1_sq = nullptr,
-  float* dm_dsigma12 = nullptr
+  float* dm_dmu1,
+  float* dm_dsigma1_sq,
+  float* dm_dsigma12
 )
 {
   auto block = cg::this_thread_block();
+  const int batch_idx = block.group_index().z;
+  img1 += batch_idx * CH * H * W;
+  img2 += batch_idx * CH * H * W;
+  mask += batch_idx * H * W;
+  denom_buffer += batch_idx * H * W;
+  ssim_map += batch_idx * CH * H * W;
+  dm_dmu1 += batch_idx * CH * H * W;
+  dm_dsigma1_sq += batch_idx * CH * H * W;
+  dm_dsigma12 += batch_idx * CH * H * W;
+
+
+  
   const int pix_y = block.group_index().y * BY + block.thread_index().y;
   const int pix_x = block.group_index().x * BX + block.thread_index().x;
   const int pix_id = pix_y * W + pix_x;
@@ -324,12 +336,22 @@ __global__ void fusedssim_backwardCUDA(
   const float* denom_buffer,
   const float* dL_dmap,
   float *dL_dimg1,
-  float* dm_dmu1 = nullptr,
-  float* dm_dsigma1_sq = nullptr,
-  float* dm_dsigma12 = nullptr
+  float* dm_dmu1,
+  float* dm_dsigma1_sq,
+  float* dm_dsigma12
 )
 {
   auto block = cg::this_thread_block();
+  const int batch_idx = block.group_index().z;
+  img1 += batch_idx * CH * H * W;
+  img2 += batch_idx * CH * H * W;
+  mask += batch_idx * H * W;
+  denom_buffer += batch_idx * H * W;
+  dm_dmu1 += batch_idx * CH * H * W;
+  dm_dsigma1_sq += batch_idx * CH * H * W;
+  dm_dsigma12 += batch_idx * CH * H * W;
+  dL_dimg1 += batch_idx * CH * H * W;
+  
   const int pix_y = block.group_index().y * BY + block.thread_index().y;
   const int pix_x = block.group_index().x * BX + block.thread_index().x;
   const int pix_id = pix_y * W + pix_x;
@@ -390,21 +412,23 @@ __global__ void fusedssim_backwardCUDA(
 
 std::tuple<torch::Tensor,torch::Tensor,torch::Tensor,torch::Tensor, torch::Tensor>
 fusedssim(
-  torch::Tensor &img1,
+  torch::Tensor &img1, // (B, 3, H, W)
   torch::Tensor &img2,
   torch::Tensor &mask
 )
 {
   const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
-  int CH = img1.size(0);
-  int H = img1.size(1);
-  int W = img1.size(2);
-  dim3 grid((W + BX - 1) / BX, (H + BY - 1) / BY, 1);
+  int B = img1.size(0);
+  int CH = img1.size(1);
+  int H = img1.size(2);
+  int W = img1.size(3);
+
+  dim3 grid((W + BX - 1) / BX, (H + BY - 1) / BY, B);
   dim3 block(BX, BY, 1);
   
   auto float_opts = img1.options().dtype(torch::kFloat32);
 
-  torch::Tensor target = torch::zeros_like(img1).contiguous();
+  torch::Tensor target = torch::zeros_like(img1).contiguous(); // (B, 3, H, W)
   torch::Tensor denom_buffer = torch::zeros_like(mask).contiguous();
   torch::Tensor dm_dmu1 = torch::zeros_like(img1).contiguous();
   torch::Tensor dm_dsigma1_sq = torch::zeros_like(img1).contiguous();
@@ -422,6 +446,8 @@ fusedssim(
     dm_dsigma1_sq.contiguous().data<float>(),
     dm_dsigma12.contiguous().data<float>()
   );
+  target = torch::sum(target, 0);
+  ERROR_CHECK
   return std::make_tuple(target, dm_dmu1, dm_dsigma1_sq, dm_dsigma12, denom_buffer);
 }
 
@@ -437,13 +463,14 @@ torch::Tensor fusedssim_backward(
 )
 {
   const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
-  int CH = img1.size(0);
-  int H = img1.size(1);
-  int W = img1.size(2);
+  int B = img1.size(0);
+  int CH = img1.size(1);
+  int H = img1.size(2);
+  int W = img1.size(3);
 
   torch::Tensor dL_dimg1 = torch::zeros_like(img1).contiguous();
 
-  dim3 grid((W + BX - 1) / BX, (H + BY - 1) / BY, 1);
+  dim3 grid((W + BX - 1) / BX, (H + BY - 1) / BY, B);
   dim3 block(BX, BY, 1);
   fusedssim_backwardCUDA<<<grid,block>>>(
     H,
@@ -459,5 +486,6 @@ torch::Tensor fusedssim_backward(
     dm_dsigma1_sq.contiguous().data<float>(),
     dm_dsigma12.contiguous().data<float>()
   );
+  ERROR_CHECK
   return dL_dimg1;
 }
