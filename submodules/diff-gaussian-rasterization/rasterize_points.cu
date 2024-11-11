@@ -166,9 +166,8 @@ RasterizeGaussiansBackwardCUDA(
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
 	torch::Tensor& mask,
-	const bool normalize_grad2D,
 	const float low_pass,
-	const bool split_by_std,
+	const bool grad_sep,
 	const bool debug) 
 {
 	const int B = viewmatrix.size(0);
@@ -244,7 +243,6 @@ RasterizeGaussiansBackwardCUDA(
 		dL_drotations.contiguous().data<float>(),
 		mask.contiguous().data<int>(),
 		point_idx.contiguous().data<int>(),
-		normalize_grad2D,
 		low_pass,
 		debug);
 		
@@ -255,11 +253,9 @@ RasterizeGaussiansBackwardCUDA(
 			torch::ones_like(dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 1)}))
 		);
 
-
-		torch::Tensor dL_dmeans2D_noabs = torch::zeros({P, 1}, means3D.options());
-		torch::Tensor dL_dmeans2D_abs = torch::zeros({P, 1}, means3D.options());
-
-		if(split_by_std){
+		if(grad_sep){
+			torch::Tensor dL_dmeans2D_noabs = torch::zeros({P, 1}, means3D.options());
+			torch::Tensor dL_dmeans2D_abs = torch::zeros({P, 1}, means3D.options());
 			dL_dmeans2D_noabs.scatter_add_(
 				0, 
 				point_idx.expand({-1, 1}), 
@@ -268,26 +264,31 @@ RasterizeGaussiansBackwardCUDA(
 			dL_dmeans2D_abs.scatter_add_(
 				0, 
 				point_idx.expand({-1, 1}), 
-				((dL_dmeans2D_sq - dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}).square().sum(-1, true) / dL_dmeans2D_N).clamp(0.0)).sqrt() * dL_dmeans2D_N
+				dL_dmeans2D_sq
 			);
+			dL_dmeans2D_sum = torch::cat({
+				dL_dmeans2D_noabs,
+				dL_dmeans2D_abs
+			}, -1);
 		}
 		else{
+			torch::Tensor dL_dmeans2D_noabs = torch::zeros({P, 2}, means3D.options());
+			torch::Tensor dL_dmeans2D_abs = torch::zeros({P, 2}, means3D.options());
 			dL_dmeans2D_noabs.scatter_add_(
 				0, 
 				point_idx.expand({-1, 1}), 
-				dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}).norm(2, -1, true)
+				dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)})
 			);
 			dL_dmeans2D_abs.scatter_add_(
 				0, 
 				point_idx.expand({-1, 1}), 
-				dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(2, 4)}).norm(2, -1, true)
+				dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)})
 			);
+			dL_dmeans2D_sum = torch::cat({
+				dL_dmeans2D_noabs.norm(2, -1, true),
+				dL_dmeans2D_abs.norm(2, -1, true)
+			}, -1);
 		}
-		dL_dmeans2D_sum = torch::cat({
-			dL_dmeans2D_noabs,
-			dL_dmeans2D_abs
-		}, -1);
-
 	}
 
   	return std::make_tuple(dL_dmeans2D_sum, dL_dopacity, dL_dmeans3D, dL_dsh, dL_dscales, dL_drotations, denom);

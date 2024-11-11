@@ -463,7 +463,6 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_drot,
 	const int* mask,
 	int* point_idx,
-	bool normalize_grad2D,
 	const float low_pass,
 	bool debug)
 {

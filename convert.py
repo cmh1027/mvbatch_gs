@@ -68,9 +68,9 @@ if not args.skip_matching:
 ### Image undistortion
 ## We need to undistort our images into ideal pinhole intrinsics.
 img_undist_cmd = (colmap_command + " image_undistorter \
-    --image_path " + args.source_path + "/input \
-    --input_path " + args.source_path + "/distorted/sparse/0 \
-    --output_path " + args.source_path + "\
+    --image_path " + args.source_path + "/images \
+    --input_path " + args.source_path + "/sparse/0 \
+    --output_path " + args.source_path + "/undistorted\
     --output_type COLMAP")
 exit_code = os.system(img_undist_cmd)
 if exit_code != 0:

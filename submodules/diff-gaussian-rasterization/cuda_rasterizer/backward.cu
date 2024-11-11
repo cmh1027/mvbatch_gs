@@ -633,7 +633,7 @@ renderCUDA(
 			dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
 
 			// Revising densficiation opacity reset
-			// dL_dalpha += (-T_final / (1.f - alpha)) * dL_dpixel_trans;
+			dL_dalpha += (-T_final / (1.f - alpha)) * dL_dpixel_trans;
 
 
 			// Helpful reusable temporary variables
@@ -648,7 +648,7 @@ renderCUDA(
 			atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely * ddely_dy);
 			atomicAdd(&dL_dmean2D[global_id].z, fabs(dL_dG * dG_ddelx * ddelx_dx));
 			atomicAdd(&dL_dmean2D[global_id].w, fabs(dL_dG * dG_ddely * ddely_dy));
-			atomicAdd(&dL_dmean2D_sq[global_id], square(dL_dG * dG_ddelx * ddelx_dx) + square(dL_dG * dG_ddely * ddely_dy));
+			atomicAdd(&dL_dmean2D_sq[global_id], sqrt(square(dL_dG * dG_ddelx * ddelx_dx) + square(dL_dG * dG_ddely * ddely_dy)));
 			atomicAdd(&dL_dmean2D_N[global_id], 1.0);
 
 

@@ -111,7 +111,7 @@ class OptimizationParams(ParamGroup):
         self.densify_grad_threshold = 0.0002
         self.densify_grad_abs_threshold = 0.0004
         self.modulate_densify_grad = 1.
-        self.split_by_std = False
+        self.grad_sep = False
         self.prune_interval = 100
         self.prune_until = 25000
         self.max_points = 6000000

@@ -117,9 +117,8 @@ class _RasterizeGaussians(torch.autograd.Function):
                 binningBuffer,
                 imgBuffer,
                 mask,
-                raster_settings.normalize_grad2D,
                 raster_settings.low_pass,
-                raster_settings.split_by_std,
+                raster_settings.grad_sep,
                 raster_settings.debug)
 
         grad_means2D, grad_opacities, grad_means3D, grad_sh, grad_scales, grad_rotations, denom = _C.rasterize_gaussians_backward(*args)
@@ -152,7 +151,7 @@ class GaussianRasterizationSettings(NamedTuple):
     low_pass : float
     log_buffer: dict
     normalize_grad2D : bool
-    split_by_std: bool
+    grad_sep: bool
 
 class GaussianRasterizer(nn.Module):
     def __init__(self, raster_settings):

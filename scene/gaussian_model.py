@@ -152,6 +152,9 @@ class GaussianModel:
         if self.active_sh_degree < self.max_sh_degree:
             self.active_sh_degree += 1
 
+    def degrade_opacity(self):
+        self._opacity = self.inverse_opacity_activation(self.get_opacity - 0.01)
+
     def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float, init_scale : float = 0.1):
         self.spatial_lr_scale = spatial_lr_scale
         fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()

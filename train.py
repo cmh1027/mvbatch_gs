@@ -124,7 +124,7 @@ def training(dataset, opt, pipe, args):
 		if opt.batch_size == 1:
 			cam_idxs = torch.tensor([cam_idx], device=torch.device('cuda'))
 		else:
-			cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, strategy=opt.batch_sample_strategy)
+			cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size)
 
 		cam_idxs.clamp_(max=len(viewpoints)-1)
 		cams = [viewpoints[idx] for idx in cam_idxs]
@@ -145,14 +145,15 @@ def training(dataset, opt, pipe, args):
 			
 		kwargs = {
 			"mask" : pmask,
-			"split_by_std": opt.split_by_std
+			"grad_sep": opt.grad_sep
 		} 
 		
 		render_pkg = render(cams, gaussians, pipe, bg, **kwargs)
 
-		(image, depth, viewspace_point_tensor, visibility_filter, radii, log_buffer) = (
+		(image, depth, residual_trans, viewspace_point_tensor, visibility_filter, radii, log_buffer) = (
 			render_pkg["render"][:3, ...], 
 			render_pkg["depth"],
+			render_pkg["residual_trans"],
 			render_pkg["viewspace_points"], 
 			render_pkg["visibility_filter"], 
 			render_pkg["radii"],
@@ -166,11 +167,12 @@ def training(dataset, opt, pipe, args):
 			collage_gt = torch.gather(gt_images, 0, collage_mask.unsqueeze(0)).squeeze(0)
 			Ll = pixel_loss(image, collage_gt, ltype=opt.loss_type)
 			loss = (1.0 - opt.lambda_dssim) * Ll
+			breakpoint()
 			if opt.lambda_dssim > 0:
 				for i in range(len(cams)):
 					collage_mask_partial = torch.where(collage_mask[0:1] == i, 1., 0.)
-					ssim_map = ssim(image, collage_gt, mask=collage_mask_partial, mask_size=opt.mask_width)
-					loss += opt.lambda_dssim * (1 - ssim_map).mean() / len(cams)
+					ssim_map = ssim(image, collage_gt, mask=collage_mask_partial)
+					loss += opt.lambda_dssim * (1 - ssim_map).mean()
 		else:
 			gt_image = cams[0].original_image
 			Ll = pixel_loss(image, gt_image, ltype=opt.loss_type)
@@ -178,7 +180,6 @@ def training(dataset, opt, pipe, args):
 			if opt.lambda_dssim > 0:
 				loss += opt.lambda_dssim * (1 - ssim(image, gt_image)).mean()
 
-		loss.backward()
 		#########################
 		if not opt.evaluate_time:
 			if iteration % 100 == 0:
@@ -191,8 +192,8 @@ def training(dataset, opt, pipe, args):
 		if opt.gs_type == "mcmc":
 			reg_loss = reg_loss + args.opacity_reg * gaussians.get_opacity.mean() 
 			reg_loss = reg_loss + args.scale_reg * gaussians.get_scaling.mean()
-		
-		reg_loss.backward()
+		total_loss = loss + reg_loss
+		total_loss.backward()
 
 		with torch.no_grad():
 			# Progress bar

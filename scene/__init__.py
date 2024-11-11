@@ -98,7 +98,7 @@ class Scene:
         return self.test_cameras[scale]
 
     def sample_cameras(self, idx, N=2, strategy="max"):
-        indices = torch.randperm(self.TR_max_prob.shape[0], device=torch.device('cuda'))
+        indices = torch.randperm(len(self.getTrainCameras()), device=torch.device('cuda'))
         indices = indices[indices != idx][:N-1]
         selected = torch.cat([torch.tensor([idx], device=torch.device('cuda')), indices])
         return selected

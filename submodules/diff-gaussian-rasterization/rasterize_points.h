@@ -61,9 +61,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
 	torch::Tensor& mask,
-	const bool normalize_grad2D,
 	const float low_pass,
-	const bool split_by_std,
+	const bool grad_sep,
 	const bool debug);
 		
 torch::Tensor markVisible(
