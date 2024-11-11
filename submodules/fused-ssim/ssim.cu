@@ -446,7 +446,6 @@ fusedssim(
     dm_dsigma1_sq.contiguous().data<float>(),
     dm_dsigma12.contiguous().data<float>()
   );
-  target = torch::sum(target, 0);
   ERROR_CHECK
   return std::make_tuple(target, dm_dmu1, dm_dsigma1_sq, dm_dsigma12, denom_buffer);
 }

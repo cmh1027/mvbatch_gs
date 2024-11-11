@@ -103,6 +103,8 @@ class OptimizationParams(ParamGroup):
         self.densify_from_iter = 500
         self.densify_until_iter = 25_000
         self.random_background = False
+        
+        self.divide_ssim = False
 
         ### 3dgs ###
         self.opacity_reset_interval = 3000

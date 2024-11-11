@@ -160,6 +160,11 @@ def training(dataset, opt, pipe, args):
 			render_pkg["log_buffer"]
 		)
 
+		if opt.divide_ssim:
+			ssim_denom = len(cams)
+		else:
+			ssim_denom = 1
+
 		if len(cams) > 1:
 			gt_images = torch.stack([cam.original_image.cuda() for cam in cams]) # (3, H, W)
 			collage_mask = make_category_mask(pmask, H, W, opt.batch_size).to(torch.int64)
@@ -173,13 +178,13 @@ def training(dataset, opt, pipe, args):
 				image_separated = collage_mask_binary.unsqueeze(1) * image.unsqueeze(0) # (B, C, H, W)
 				gt_separated = collage_mask_binary.unsqueeze(1) * collage_gt.unsqueeze(0)  # (B, C, H, W)
 				ssim_map = ssim(image_separated, gt_separated, mask=collage_mask_binary)
-				loss += opt.lambda_dssim * (1 - ssim_map).mean()
+				loss += opt.lambda_dssim * (1 - ssim_map).sum(dim=0).mean() / ssim_denom
 		else:
 			gt_image = cams[0].original_image
 			Ll = pixel_loss(image, gt_image, ltype=opt.loss_type)
 			loss = (1.0 - opt.lambda_dssim) * Ll
 			if opt.lambda_dssim > 0:
-				loss += opt.lambda_dssim * (1 - ssim(image, gt_image)).mean()
+				loss += opt.lambda_dssim * (1 - ssim(image[None], gt_image[None])).mean() / ssim_denom
 			
 		#########################
 		if not opt.evaluate_time:
