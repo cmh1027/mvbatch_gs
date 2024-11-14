@@ -20,5 +20,6 @@ fusedssim_backward(
     torch::Tensor &dL_dmap,
     torch::Tensor &dm_dmu1,
     torch::Tensor &dm_dsigma1_sq,
-    torch::Tensor &dm_dsigma12
+    torch::Tensor &dm_dsigma12,
+    bool normalize_backward
 );

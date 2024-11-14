@@ -338,7 +338,8 @@ __global__ void fusedssim_backwardCUDA(
   float *dL_dimg1,
   float* dm_dmu1,
   float* dm_dsigma1_sq,
-  float* dm_dsigma12
+  float* dm_dsigma12,
+  bool normalize_backward
 )
 {
   auto block = cg::this_thread_block();
@@ -368,9 +369,11 @@ __global__ void fusedssim_backwardCUDA(
     float pix1 = get_pix_value(img1, i, pix_y, pix_x, H, W);
     float pix2 = get_pix_value(img2, i, pix_y, pix_x, H, W);
     load_into_shared(buf1, dL_dmap, H, W, i);
-    load_into_shared(buf2, denom_buffer, H, W, 0);
-    block.sync();
-    multiply_shared_mem(buf1, buf2);
+    if(normalize_backward){
+      load_into_shared(buf2, denom_buffer, H, W, 0);
+      block.sync();
+      multiply_shared_mem(buf1, buf2);
+    }
     block.sync();
 
     // gradient from mu1
@@ -458,7 +461,8 @@ torch::Tensor fusedssim_backward(
   torch::Tensor &dm_dmu1,
   torch::Tensor &dm_dsigma1_sq,
   torch::Tensor &dm_dsigma12,
-  torch::Tensor &denom_buffer
+  torch::Tensor &denom_buffer,
+  bool normalize_backward
 )
 {
   const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
@@ -483,7 +487,8 @@ torch::Tensor fusedssim_backward(
     dL_dimg1.contiguous().data<float>(),
     dm_dmu1.contiguous().data<float>(),
     dm_dsigma1_sq.contiguous().data<float>(),
-    dm_dsigma12.contiguous().data<float>()
+    dm_dsigma12.contiguous().data<float>(),
+    normalize_backward
   );
   ERROR_CHECK
   return dL_dimg1;

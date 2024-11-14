@@ -47,11 +47,18 @@ def training(dataset, opt, pipe, args):
 	else:
 		testing_iterations = args.test_iterations
 
+	if opt.lr_coef != 1.:
+		opt.position_lr_init *= opt.lr_coef
+		opt.position_lr_final *= opt.lr_coef
+		opt.position_lr_delay_mult *= opt.lr_coef
+		opt.feature_lr *= opt.lr_coef
+		opt.opacity_lr *= opt.lr_coef
+		opt.scaling_lr *= opt.lr_coef
+		opt.rotation_lr *= opt.lr_coef
+
 	if opt.gs_type == "original":
 		dataset.init_scale = 1
 		opt.densify_until_iter = 25000
-		opt.densify_grad_threshold *= opt.modulate_densify_grad
-		opt.densify_grad_abs_threshold *= opt.modulate_densify_grad
 		opt.predictable_growth_degree = opt.predictable_growth_degree_3dgs
 		if dataset.cap_max_gs != -1:
 			dataset.cap_max = dataset.cap_max_gs
@@ -160,11 +167,6 @@ def training(dataset, opt, pipe, args):
 			render_pkg["log_buffer"]
 		)
 
-		if opt.divide_ssim:
-			ssim_denom = len(cams)
-		else:
-			ssim_denom = 1
-
 		if len(cams) > 1:
 			gt_images = torch.stack([cam.original_image.cuda() for cam in cams]) # (3, H, W)
 			collage_mask = make_category_mask(pmask, H, W, opt.batch_size).to(torch.int64)
@@ -178,13 +180,13 @@ def training(dataset, opt, pipe, args):
 				image_separated = collage_mask_binary.unsqueeze(1) * image.unsqueeze(0) # (B, C, H, W)
 				gt_separated = collage_mask_binary.unsqueeze(1) * collage_gt.unsqueeze(0)  # (B, C, H, W)
 				ssim_map = ssim(image_separated, gt_separated, mask=collage_mask_binary)
-				loss += opt.lambda_dssim * (1 - ssim_map).sum(dim=0).mean() / ssim_denom
+				loss += opt.lambda_dssim * (1 - ssim_map).sum(dim=0).mean() 
 		else:
 			gt_image = cams[0].original_image
 			Ll = pixel_loss(image, gt_image, ltype=opt.loss_type)
 			loss = (1.0 - opt.lambda_dssim) * Ll
 			if opt.lambda_dssim > 0:
-				loss += opt.lambda_dssim * (1 - ssim(image[None], gt_image[None])).mean() / ssim_denom
+				loss += opt.lambda_dssim * (1 - ssim(image, gt_image)).mean()
 			
 		#########################
 		if not opt.evaluate_time:
@@ -226,13 +228,16 @@ def training(dataset, opt, pipe, args):
 				if opt.gs_type == "original":
 					mask = visibility_filter 
 					gaussians.max_radii2D[mask] = torch.max(gaussians.max_radii2D[mask], radii[mask])
-					vs = viewspace_point_tensor.grad[..., 0:1]
-					vs_abs = viewspace_point_tensor.grad[..., 1:2]
+					vs_clone = viewspace_point_tensor.grad[..., 0:1]
+					if opt.split_original:
+						vs_split = viewspace_point_tensor.grad[..., 0:1]
+					else:
+						vs_split = viewspace_point_tensor.grad[..., 1:2]
 					if opt.denom:
 						denom = log_buffer['denom']/len(cams)
 					else:
 						denom = visibility_filter[..., None]
-					gaussians.add_densification_stats(vs, vs_abs, mask, denom)
+					gaussians.add_densification_stats(vs_clone, vs_split, mask, denom)
 
 				if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
 					dense_step = (iteration - from_iter) // opt.densification_interval

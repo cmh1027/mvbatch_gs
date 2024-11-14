@@ -1,6 +1,5 @@
 {
     "resolution": 1,
-    "opacity_reg": 0.001,
     "cap_max": 3400000,
     "predictable_growth_degree_3dgs": 2.0
 }

@@ -93,7 +93,7 @@ class OptimizationParams(ParamGroup):
         self.opacity_lr = 0.05
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
-        self.beta_lr = 0.0025
+        self.lr_coef = 1.
         self.percent_dense = 0.01
         self.loss_type = "l1"
 
@@ -103,16 +103,13 @@ class OptimizationParams(ParamGroup):
         self.densify_from_iter = 500
         self.densify_until_iter = 25_000
         self.random_background = False
-        
-        self.divide_ssim = False
 
         ### 3dgs ###
         self.opacity_reset_interval = 3000
         self.prune_threshold = 0.005
         self.opacity_reset_value = 0.01
-        self.densify_grad_threshold = 0.0002
-        self.densify_grad_abs_threshold = 0.0004
-        self.modulate_densify_grad = 1.
+        self.densify_grad_clone_threshold = 0.0002
+        self.densify_grad_split_threshold = 0.0004
         self.grad_sep = False
         self.prune_interval = 100
         self.prune_until = 25000

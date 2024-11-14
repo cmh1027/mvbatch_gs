@@ -1,4 +1,5 @@
 {
     "resolution": 4,
+    "opacity_reg": 0.05,
     "cap_max": 5900000
 }

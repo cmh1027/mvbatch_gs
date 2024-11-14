@@ -37,8 +37,8 @@ def create_window(window_size, channel):
     window = Variable(_2D_window.expand(channel, 1, window_size, window_size).contiguous())
     return window
 
-def ssim(img1, img2, mask=None):
-    return fused_ssim(img1, img2, mask)
+def ssim(img1, img2, mask=None, normalize_backward=True):
+    return fused_ssim(img1, img2, mask, normalize_backward)
 
 # def ssim(img1, img2, window_size=11, mask=None):
 #     channel = img1.size(-3)
