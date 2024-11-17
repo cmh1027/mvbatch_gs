@@ -152,7 +152,8 @@ def training(dataset, opt, pipe, args):
 			
 		kwargs = {
 			"mask" : pmask,
-			"grad_sep": opt.grad_sep
+			"grad_sep": opt.grad_sep,
+			"time_check": opt.time_check
 		} 
 		
 		render_pkg = render(cams, gaussians, pipe, bg, **kwargs)
@@ -202,6 +203,14 @@ def training(dataset, opt, pipe, args):
 			reg_loss = reg_loss + args.scale_reg * gaussians.get_scaling.mean()
 		total_loss = loss + reg_loss
 		total_loss.backward()
+
+		if not opt.evaluate_time and opt.time_check and iteration % 10 == 0:
+			tb_writer.add_scalar(f'time/forward/measure', log_buffer["forward_measureTime"], iteration)
+			tb_writer.add_scalar(f'time/forward/preprocess', log_buffer["forward_preprocessTime"], iteration)
+			tb_writer.add_scalar(f'time/forward/render', log_buffer["forward_renderTime"], iteration)
+			tb_writer.add_scalar(f'time/backward/preprocess', log_buffer["backward_preprocessTime"], iteration)
+			tb_writer.add_scalar(f'time/backward/render', log_buffer["backward_renderTime"], iteration)
+
 
 		with torch.no_grad():
 			# Progress bar

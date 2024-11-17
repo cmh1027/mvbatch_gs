@@ -34,7 +34,7 @@ std::function<char*(size_t N)> resizeFunctional(torch::Tensor& t) {
     return lambda;
 }
 
-std::tuple<int, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<int, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, float, float, float>
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
@@ -53,6 +53,7 @@ RasterizeGaussiansCUDA(
 	const torch::Tensor& campos,
 	torch::Tensor& mask,
 	const float low_pass,
+	const bool time_check,
 	const bool debug)
 {
 	if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
@@ -99,6 +100,7 @@ RasterizeGaussiansCUDA(
 
 	int rendered = 0;
 	int batch_rendered = 0;
+	double measureTime, preprocessTime, renderTime;
 	if(P != 0)
 	{
 		int M = 0;
@@ -134,14 +136,18 @@ RasterizeGaussiansCUDA(
 			radii.contiguous().data<int>(),
 			mask.contiguous().data<int>(),
 			low_pass,
+			time_check,
 			debug);
 		rendered = std::get<0>(returned);
 		batch_rendered = std::get<1>(returned);
+		measureTime = std::get<2>(returned);
+		preprocessTime = std::get<3>(returned);
+		renderTime = std::get<4>(returned);
 	}
-	return std::make_tuple(rendered, batch_rendered, out_color, out_depth, out_trans, radii, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask);
+	return std::make_tuple(rendered, batch_rendered, out_color, out_depth, out_trans, radii, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask, measureTime, preprocessTime, renderTime);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, float, float>
 RasterizeGaussiansBackwardCUDA(
  	const torch::Tensor& background,
 	const torch::Tensor& means3D,
@@ -168,6 +174,7 @@ RasterizeGaussiansBackwardCUDA(
 	torch::Tensor& mask,
 	const float low_pass,
 	const bool grad_sep,
+	const bool time_check,
 	const bool debug) 
 {
 	const int B = viewmatrix.size(0);
@@ -204,9 +211,11 @@ RasterizeGaussiansBackwardCUDA(
 	
 	torch::Tensor dL_dmeans2D_sum = torch::empty({0}, means3D.options());
 	torch::Tensor denom = torch::zeros({P, 1}, means3D.options());
+
+	double preprocessTime, renderTime;
 	if(BR != 0)
 	{  
-		CudaRasterizer::Rasterizer::backward(P, degree, M, B, R, BR,
+		auto returned = CudaRasterizer::Rasterizer::backward(P, degree, M, B, R, BR,
 		background.contiguous().data<float>(),
 		W, H, 
 		means3D.contiguous().data<float>(),
@@ -244,8 +253,12 @@ RasterizeGaussiansBackwardCUDA(
 		mask.contiguous().data<int>(),
 		point_idx.contiguous().data<int>(),
 		low_pass,
+		time_check,
 		debug);
-		
+
+		preprocessTime = std::get<0>(returned);
+		renderTime = std::get<1>(returned);
+
 		point_idx = point_idx.to(torch::kInt64);
 		denom.scatter_add_(
 			0, 
@@ -291,7 +304,7 @@ RasterizeGaussiansBackwardCUDA(
 		}
 	}
 
-  	return std::make_tuple(dL_dmeans2D_sum, dL_dopacity, dL_dmeans3D, dL_dsh, dL_dscales, dL_drotations, denom);
+  	return std::make_tuple(dL_dmeans2D_sum, dL_dopacity, dL_dmeans3D, dL_dsh, dL_dscales, dL_drotations, denom, preprocessTime, renderTime);
 }
 
 torch::Tensor markVisible(

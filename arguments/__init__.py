@@ -143,7 +143,7 @@ class OptimizationParams(ParamGroup):
         self.predictable_growth_degree_mcmc = 2.0
 
         self.split_original = False
-        
+        self.time_check = False
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

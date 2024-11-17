@@ -28,7 +28,7 @@ namespace CudaRasterizer
 			float* projmatrix,
 			bool* present);
 
-		static std::tuple<int, int> forward(
+		static std::tuple<int, int, float, float, float> forward(
 			std::function<char* (size_t)> geometryBuffer,
 			std::function<char* (size_t)> binningBuffer,
 			std::function<char* (size_t)> imageBuffer,
@@ -55,9 +55,10 @@ namespace CudaRasterizer
 			int* radii,
 			const int* mask,
 			const float low_pass,
+			const bool time_check,
 			bool debug = false);
 
-		static void backward(
+		static std::tuple<float, float> backward(
 			const int P, int D, int M, int B, int R, int BR,
 			const float* background,
 			const int width, int height,
@@ -96,6 +97,7 @@ namespace CudaRasterizer
 			const int* mask,
 			int* point_idx,
 			const float low_pass,
+			const bool time_check,
 			bool debug);
 	};
 };

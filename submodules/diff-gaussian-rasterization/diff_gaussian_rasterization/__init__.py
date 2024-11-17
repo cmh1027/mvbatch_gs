@@ -69,13 +69,32 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.campos,
             raster_settings.mask,
             raster_settings.low_pass,
+            raster_settings.time_check,
             raster_settings.debug
         )
         
-        num_rendered, batch_num_rendered, rendered_color, rendered_depth, residual_trans, radii, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask = _C.rasterize_gaussians(*args)
+        (
+            num_rendered, 
+            batch_num_rendered, 
+            rendered_color, 
+            rendered_depth, 
+            residual_trans, 
+            radii, 
+            cacheBuffer, 
+            geomBuffer, 
+            binningBuffer, 
+            imgBuffer, 
+            mask,
+            measureTime,
+            preprocessTime,
+            renderTime
+        ) = _C.rasterize_gaussians(*args)
 
         raster_settings.log_buffer["R"] = num_rendered
         raster_settings.log_buffer["BR"] = batch_num_rendered
+        raster_settings.log_buffer["forward_measureTime"] = measureTime
+        raster_settings.log_buffer["forward_preprocessTime"] = preprocessTime
+        raster_settings.log_buffer["forward_renderTime"] = renderTime
         # Keep relevant tensors for backward
         ctx.raster_settings = raster_settings
         ctx.num_rendered = num_rendered
@@ -119,10 +138,23 @@ class _RasterizeGaussians(torch.autograd.Function):
                 mask,
                 raster_settings.low_pass,
                 raster_settings.grad_sep,
+                raster_settings.time_check,
                 raster_settings.debug)
 
-        grad_means2D, grad_opacities, grad_means3D, grad_sh, grad_scales, grad_rotations, denom = _C.rasterize_gaussians_backward(*args)
+        (
+            grad_means2D, 
+            grad_opacities, 
+            grad_means3D, 
+            grad_sh, 
+            grad_scales, 
+            grad_rotations, 
+            denom,
+            preprocessTime,
+            renderTime
+        ) = _C.rasterize_gaussians_backward(*args)
         raster_settings.log_buffer["denom"] = denom
+        raster_settings.log_buffer["backward_preprocessTime"] = preprocessTime
+        raster_settings.log_buffer["backward_renderTime"] = renderTime
         grads = (
             grad_means3D,
             grad_means2D,
@@ -152,6 +184,7 @@ class GaussianRasterizationSettings(NamedTuple):
     log_buffer: dict
     normalize_grad2D : bool
     grad_sep: bool
+    time_check: bool
 
 class GaussianRasterizer(nn.Module):
     def __init__(self, raster_settings):

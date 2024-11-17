@@ -249,7 +249,7 @@ CudaRasterizer::BinningState CudaRasterizer::BinningState::fromChunk(char*& chun
 
 // Forward rendering procedure for differentiable rasterization
 // of Gaussians.
-std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
+std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 	std::function<char* (size_t)> geometryBuffer,
 	std::function<char* (size_t)> binningBuffer,
 	std::function<char* (size_t)> imageBuffer,
@@ -276,8 +276,13 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 	int* radii,
 	const int* mask,
 	const float low_pass,
+	const bool time_check,
 	bool debug)
 {
+
+	clock_t start;
+	double measureTime, preprocessTime, renderTime;
+
 	const dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
 	const dim3 block(BLOCK_X, BLOCK_Y, 1);
 	const dim3 render_tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, B);
@@ -289,6 +294,7 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 	CacheState cacheState = CacheState::fromChunk(cache_chunkptr, P, B);
 	int BR;
 
+	start = clock();
 	CHECK_CUDA(FORWARD::measureBufferSize(
 		P, D, M, B,
 		means3D,
@@ -308,6 +314,8 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		cacheState.batch_rendered_check,
 		low_pass
 	), debug)
+	if(time_check) cudaDeviceSynchronize();
+	measureTime = (double)(clock() - start) / CLOCKS_PER_SEC;
 
     cub::DeviceScan::InclusiveSum(cacheState.scanning_space, cacheState.scan_size, cacheState.batch_num_rendered, cacheState.batch_num_rendered_sums, P);
 	cudaMemcpy(&BR, cacheState.batch_num_rendered_sums + P - 1, sizeof(int), cudaMemcpyDeviceToHost);
@@ -321,6 +329,8 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 	size_t img_chunk_size = required<ImageState>(width * height);
 	char* img_chunkptr = imageBuffer(img_chunk_size);
 	ImageState imgState = ImageState::fromChunk(img_chunkptr, width * height);
+
+	start = clock();
 	CHECK_CUDA(FORWARD::preprocess(
 		BR, P, D, M,
 		means3D,
@@ -350,7 +360,8 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		geomState.point_batch_index,
 		low_pass
 	), debug)
-
+	if(time_check) cudaDeviceSynchronize();
+	preprocessTime = (double)(clock() - start) / CLOCKS_PER_SEC;
 
 	// Compute prefix sum over full list of touched tile counts by Gaussians
 	// E.g., [2, 3, 0, 2, 1] -> [2, 5, 5, 7, 8]
@@ -402,6 +413,8 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 	CHECK_CUDA(, debug)
 	ERROR_CHECK
 	// Let each tile blend its range of Gaussians independently in parallel
+
+	start = clock();
 	CHECK_CUDA(FORWARD::render(
 		render_tile_grid, render_block,
 		imgState.ranges,
@@ -420,12 +433,15 @@ std::tuple<int, int> CudaRasterizer::Rasterizer::forward(
 		mask,
 		geomState.point_batch_index
 	), debug)
-	return std::make_tuple(num_rendered, BR);	
+	if(time_check) cudaDeviceSynchronize();
+	renderTime = (double)(clock() - start) / CLOCKS_PER_SEC;
+
+	return std::make_tuple(num_rendered, BR, measureTime, preprocessTime, renderTime);
 }
 
 // Produce necessary gradients for optimization, corresponding
 // to forward render pass
-void CudaRasterizer::Rasterizer::backward(
+std::tuple<float, float> CudaRasterizer::Rasterizer::backward(
 	const int P, int D, int M, int B, int R, int BR,
 	const float* background,
 	const int width, int height,
@@ -464,8 +480,13 @@ void CudaRasterizer::Rasterizer::backward(
 	const int* mask,
 	int* point_idx,
 	const float low_pass,
+	const bool time_check,
 	bool debug)
 {
+
+	clock_t start;
+	double preprocessTime, renderTime;
+
 	CacheState cacheState = CacheState::fromChunk(cache_buffer, P, B);
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, BR);
 	BinningState binningState = BinningState::fromChunk(binning_buffer, R);
@@ -481,6 +502,7 @@ void CudaRasterizer::Rasterizer::backward(
 	// Compute loss gradients w.r.t. 2D mean position, conic matrix,
 	// opacity and RGB of Gaussians from per-pixel loss gradients.
 	// If we were given precomputed colors and not SHs, use them.
+	start = clock();
 	CHECK_CUDA(BACKWARD::render(
 		render_tile_grid, render_block,
 		imgState.ranges,
@@ -507,7 +529,11 @@ void CudaRasterizer::Rasterizer::backward(
 		geomState.point_index,
 		geomState.point_batch_index
 	), debug)
+	if(time_check) cudaDeviceSynchronize();
+	renderTime = (double)(clock() - start) / CLOCKS_PER_SEC;
 
+
+	start = clock();
 	CHECK_CUDA(BACKWARD::preprocess(P, D, M, BR,
 		(float3*)means3D,
 		radii,
@@ -538,4 +564,8 @@ void CudaRasterizer::Rasterizer::backward(
 		geomState.point_batch_index,
 		low_pass
 	), debug)
+	if(time_check) cudaDeviceSynchronize();
+	preprocessTime = (double)(clock() - start) / CLOCKS_PER_SEC;
+	
+	return std::make_tuple(preprocessTime, renderTime);
 }
