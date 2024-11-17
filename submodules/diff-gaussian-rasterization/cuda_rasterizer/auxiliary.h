@@ -171,4 +171,10 @@ throw std::runtime_error(cudaGetErrorString(ret)); \
 } \
 }
 
+#define TIME_CHECK(A, time_check, start, output) \
+	if(time_check) cudaDeviceSynchronize(); \
+	start = clock(); \
+	A; \
+	if(time_check) cudaDeviceSynchronize(); \
+	output = (double)(clock() - start) / CLOCKS_PER_SEC; 
 #endif

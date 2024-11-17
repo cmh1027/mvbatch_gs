@@ -65,8 +65,7 @@ __global__ void checkFrustum(int P,
 	present[idx] = in_frustum(idx, orig_points, viewmatrix, projmatrix, p_view);
 }
 
-
-__global__ void savePointIndex(
+__global__ void savePointIndexCUDA(
 	int P, int B,
     const int* batch_num_rendered_sums,
 	const bool* batch_rendered_check,
@@ -87,9 +86,20 @@ __global__ void savePointIndex(
 	}
 }
 
+void savePointIndex(
+	int P, int B,
+    const int* batch_num_rendered_sums,
+	const bool* batch_rendered_check,
+	int* point_index,
+	int* point_batch_index)
+{
+	savePointIndexCUDA << <(P + 255) / 256, 256 >> > (P, B, batch_num_rendered_sums, batch_rendered_check, point_index, point_batch_index);
+}
+
+
 // Generates one key/value pair for all Gaussian / tile overlaps. 
 // Run once per Gaussian (1:N mapping).
-__global__ void duplicateWithKeys(
+__global__ void duplicateWithKeysCUDA(
 	int BR, int P, int B, int W,
 	const float2* points_xy,
 	const float* depths,
@@ -138,6 +148,32 @@ __global__ void duplicateWithKeys(
 	}
 }
 
+void duplicateWithKeys(
+	int BR, int P, int B, int W,
+	const float2* points_xy,
+	const float* depths,
+	const uint32_t* offsets,
+	uint64_t* gaussian_keys_unsorted,
+	uint32_t* gaussian_values_unsorted,
+	const int* radii,
+	dim3 grid,
+	const int* point_index,
+	const int* point_batch_index)
+{
+	duplicateWithKeysCUDA << <(BR + 255) / 256, 256 >> > (
+		BR, P, B, W,
+		points_xy,
+		depths,
+		offsets,
+		gaussian_keys_unsorted,
+		gaussian_values_unsorted,
+		radii,
+		grid,
+		point_index,
+		point_batch_index
+	);
+}
+
 // Check keys to see if it is at the start/end of one tile's range in 
 // the full sorted list. If yes, write start/end of this tile. 
 // Run once per instanced (duplicated) Gaussian ID.
@@ -147,7 +183,7 @@ e.g batch=4
 ranges = [(0, 0), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1), (1, 2) ...]
 
 */
-__global__ void identifyTileRanges(int L, int B, uint64_t* point_list_keys, uint2* ranges)
+__global__ void identifyTileRangesCUDA(int L, int B, uint64_t* point_list_keys, uint2* ranges)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= L)
@@ -173,6 +209,15 @@ __global__ void identifyTileRanges(int L, int B, uint64_t* point_list_keys, uint
 	}
 	if (idx == L - 1)
 		ranges[curridx].y = L;
+}
+
+void identifyTileRanges(int L, int B, uint64_t* point_list_keys, uint2* ranges)
+{
+	identifyTileRangesCUDA << <(L + 255) / 256, 256 >> > (
+		L, B,
+		point_list_keys,
+		ranges
+	);
 	
 }
 
@@ -249,7 +294,7 @@ CudaRasterizer::BinningState CudaRasterizer::BinningState::fromChunk(char*& chun
 
 // Forward rendering procedure for differentiable rasterization
 // of Gaussians.
-std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
+std::tuple<int, int, float, float, float, float, float, float, float> CudaRasterizer::Rasterizer::forward(
 	std::function<char* (size_t)> geometryBuffer,
 	std::function<char* (size_t)> binningBuffer,
 	std::function<char* (size_t)> imageBuffer,
@@ -279,9 +324,8 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 	const bool time_check,
 	bool debug)
 {
-
 	clock_t start;
-	double measureTime, preprocessTime, renderTime;
+	double measureTime, saveIndexTime, preprocessTime, dupTime, sortTime, identifyTime, renderTime;
 
 	const dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
 	const dim3 block(BLOCK_X, BLOCK_Y, 1);
@@ -294,9 +338,8 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 	CacheState cacheState = CacheState::fromChunk(cache_chunkptr, P, B);
 	int BR;
 
-	if(time_check) cudaDeviceSynchronize();
-	start = clock();
-	CHECK_CUDA(FORWARD::measureBufferSize(
+
+	TIME_CHECK(FORWARD::measureBufferSize(
 		P, D, M, B,
 		means3D,
 		(glm::vec3*)scales,
@@ -314,9 +357,8 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		cacheState.batch_num_rendered,
 		cacheState.batch_rendered_check,
 		low_pass
-	), debug)
-	if(time_check) cudaDeviceSynchronize();
-	measureTime = (double)(clock() - start) / CLOCKS_PER_SEC;
+	), time_check, start, measureTime)
+
 
     cub::DeviceScan::InclusiveSum(cacheState.scanning_space, cacheState.scan_size, cacheState.batch_num_rendered, cacheState.batch_num_rendered_sums, P);
 	cudaMemcpy(&BR, cacheState.batch_num_rendered_sums + P - 1, sizeof(int), cudaMemcpyDeviceToHost);
@@ -325,15 +367,18 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 	char* chunkptr = geometryBuffer(chunk_size);
 	GeometryState geomState = GeometryState::fromChunk(chunkptr, BR);
 	
-	savePointIndex << <(P + 255) / 256, 256 >> > (P, B, cacheState.batch_num_rendered_sums, cacheState.batch_rendered_check, geomState.point_index, geomState.point_batch_index);
+	TIME_CHECK(savePointIndex(P, B,
+		cacheState.batch_num_rendered_sums, 
+		cacheState.batch_rendered_check, 
+		geomState.point_index, 
+		geomState.point_batch_index
+	), time_check, start, saveIndexTime)
 
 	size_t img_chunk_size = required<ImageState>(width * height);
 	char* img_chunkptr = imageBuffer(img_chunk_size);
 	ImageState imgState = ImageState::fromChunk(img_chunkptr, width * height);
 
-	if(time_check) cudaDeviceSynchronize();
-	start = clock();
-	CHECK_CUDA(FORWARD::preprocess(
+	TIME_CHECK(FORWARD::preprocess(
 		BR, P, D, M,
 		means3D,
 		(glm::vec3*)scales,
@@ -361,17 +406,16 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		geomState.point_index,
 		geomState.point_batch_index,
 		low_pass
-	), debug)
-	if(time_check) cudaDeviceSynchronize();
-	preprocessTime = (double)(clock() - start) / CLOCKS_PER_SEC;
+	), time_check, start, preprocessTime)
+
 
 	// Compute prefix sum over full list of touched tile counts by Gaussians
 	// E.g., [2, 3, 0, 2, 1] -> [2, 5, 5, 7, 8]
-	CHECK_CUDA(cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, BR), debug)
+	cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, BR);
 
 	// Retrieve total number of Gaussian instances to launch and resize aux buffers
 	int num_rendered;
-	CHECK_CUDA(cudaMemcpy(&num_rendered, geomState.point_offsets + BR - 1, sizeof(int), cudaMemcpyDeviceToHost), debug);
+	cudaMemcpy(&num_rendered, geomState.point_offsets + BR - 1, sizeof(int), cudaMemcpyDeviceToHost);
 
 	size_t binning_chunk_size = required<BinningState>(num_rendered);
 	char* binning_chunkptr = binningBuffer(binning_chunk_size);
@@ -379,7 +423,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 
 	// For each instance to be rendered, produce adequate [ tile | depth ] key 
 	// and corresponding dublicated Gaussian indices to be sorted
-	duplicateWithKeys << <(BR + 255) / 256, 256 >> > (
+	TIME_CHECK(duplicateWithKeys(
 		BR, P, B, width,
 		geomState.means2D,
 		geomState.depths,
@@ -389,36 +433,36 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		radii,
 		tile_grid,
 		geomState.point_index,
-		geomState.point_batch_index)
+		geomState.point_batch_index
+	), time_check, start, dupTime)
 	
-	CHECK_CUDA(, debug)
 	int bit = getHigherMsb(tile_grid.x * tile_grid.y);
 
 	// Sort complete list of (duplicated) Gaussian indices by keys
-	CHECK_CUDA(cub::DeviceRadixSort::SortPairs(
+	TIME_CHECK(cub::DeviceRadixSort::SortPairs(
 		binningState.list_sorting_space,
 		binningState.sorting_size,
 		binningState.point_list_keys_unsorted, binningState.point_list_keys,
 		binningState.point_list_unsorted, binningState.point_list,
-		num_rendered, 0, 48 + bit), debug)
+		num_rendered, 0, 48 + bit
+	), time_check, start, sortTime)
 
-	CHECK_CUDA(cudaMemset(imgState.ranges, 0, tile_grid.x * tile_grid.y * sizeof(uint2)), debug);
+	cudaMemset(imgState.ranges, 0, tile_grid.x * tile_grid.y * sizeof(uint2));
 
 	// Identify start and end of per-tile workloads in sorted list
 	if (num_rendered > 0){
-		identifyTileRanges << <(num_rendered + 255) / 256, 256 >> > (
+		TIME_CHECK(identifyTileRanges(
 			num_rendered, B,
 			binningState.point_list_keys,
-			imgState.ranges);
+			imgState.ranges
+		), time_check, start, identifyTime)
 	}
 
-	CHECK_CUDA(, debug)
 	ERROR_CHECK
 	// Let each tile blend its range of Gaussians independently in parallel
 
-	if(time_check) cudaDeviceSynchronize();
-	start = clock();
-	CHECK_CUDA(FORWARD::render(
+
+	TIME_CHECK(FORWARD::render(
 		render_tile_grid, render_block,
 		imgState.ranges,
 		binningState.point_list,
@@ -435,11 +479,10 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		out_trans,
 		mask,
 		geomState.point_batch_index
-	), debug)
-	if(time_check) cudaDeviceSynchronize();
-	renderTime = (double)(clock() - start) / CLOCKS_PER_SEC;
+	), time_check, start, renderTime)
 
-	return std::make_tuple(num_rendered, BR, measureTime, preprocessTime, renderTime);
+
+	return std::make_tuple(num_rendered, BR, measureTime, saveIndexTime, preprocessTime, dupTime, sortTime, identifyTime, renderTime);
 }
 
 // Produce necessary gradients for optimization, corresponding
@@ -505,9 +548,8 @@ std::tuple<float, float> CudaRasterizer::Rasterizer::backward(
 	// Compute loss gradients w.r.t. 2D mean position, conic matrix,
 	// opacity and RGB of Gaussians from per-pixel loss gradients.
 	// If we were given precomputed colors and not SHs, use them.
-	if(time_check) cudaDeviceSynchronize();
-	start = clock();
-	CHECK_CUDA(BACKWARD::render(
+
+	TIME_CHECK(BACKWARD::render(
 		render_tile_grid, render_block,
 		imgState.ranges,
 		binningState.point_list,
@@ -532,13 +574,11 @@ std::tuple<float, float> CudaRasterizer::Rasterizer::backward(
 		mask,
 		geomState.point_index,
 		geomState.point_batch_index
-	), debug)
-	if(time_check) cudaDeviceSynchronize();
-	renderTime = (double)(clock() - start) / CLOCKS_PER_SEC;
+	), time_check, start, renderTime)
+	ERROR_CHECK
 
-	if(time_check) cudaDeviceSynchronize();
-	start = clock();
-	CHECK_CUDA(BACKWARD::preprocess(P, D, M, BR,
+
+	TIME_CHECK(BACKWARD::preprocess(P, D, M, BR,
 		(float3*)means3D,
 		radii,
 		shs,
@@ -567,9 +607,8 @@ std::tuple<float, float> CudaRasterizer::Rasterizer::backward(
 		geomState.point_index,
 		geomState.point_batch_index,
 		low_pass
-	), debug)
-	if(time_check) cudaDeviceSynchronize();
-	preprocessTime = (double)(clock() - start) / CLOCKS_PER_SEC;
-	
+	), time_check, start, preprocessTime)
+	ERROR_CHECK
+
 	return std::make_tuple(preprocessTime, renderTime);
 }

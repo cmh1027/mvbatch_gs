@@ -345,7 +345,9 @@ renderCUDA(
 	const int* __restrict__ point_batch_index)
 {
 	// Identify current tile and associated min/max pixel range.
-	const int THREAD_SIZE = BLOCK_SIZE / BATCH;
+	static constexpr int THREAD_SIZE = BLOCK_SIZE / BATCH;
+	static constexpr int THREAD_SIZE_COLOR = BLOCK_SIZE * CHANNELS / BATCH;
+	static constexpr bool NO_BATCH = BATCH == 1;
 
 	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
 	auto block = cg::this_thread_block();
@@ -362,7 +364,12 @@ renderCUDA(
 	bool mask_inside = pix_in_block_id < PH * PW * BLOCK_SIZE;
 	int pix_in_block;
 	if(mask_inside){
-		pix_in_block = mask[pix_in_block_id];
+		if(NO_BATCH){
+			pix_in_block = block.thread_index().y * W + block.thread_index().x;
+		}
+		else{
+			pix_in_block = mask[pix_in_block_id];
+		}
 	}
 	else{
 		pix_in_block = 0;
@@ -387,16 +394,17 @@ renderCUDA(
 	int toDo = range.y - range.x;
 	
 	// Allocate storage for batches of collectively fetched data.
-	__shared__ int collected_id[BLOCK_SIZE / BATCH];
-	__shared__ float2 collected_xy[BLOCK_SIZE / BATCH];
-	__shared__ float4 collected_conic_opacity[BLOCK_SIZE / BATCH];
+	__shared__ int collected_id[THREAD_SIZE];
+	__shared__ float2 collected_xy[THREAD_SIZE];
+	__shared__ float4 collected_conic_opacity[THREAD_SIZE];
+	__shared__ float collected_colors[THREAD_SIZE_COLOR];
 
 	// Initialize helper variables
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
 	float C[CHANNELS] = { 0 };
-	float D = { 0 };
+	// float D = { 0 };
 
 	// Iterate over batches until all done or range is complete
 	for (int i = 0; i < rounds; i++, toDo -= THREAD_SIZE)
@@ -414,6 +422,8 @@ renderCUDA(
 			collected_id[block.thread_rank()] = coll_id;
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
+			for (int i = 0; i < CHANNELS; i++)
+				collected_colors[i * THREAD_SIZE + block.thread_rank()] = features[coll_id * CHANNELS + i];
 		}
 		block.sync();
 		
@@ -423,7 +433,7 @@ renderCUDA(
 			// Keep track of current position in range
 			contributor++;
 			// ignore if batch_idx of the point is not matched with the value in the mask 
-			if(point_batch_index[collected_id[j]] != batch_idx) continue;
+			// if(point_batch_index[collected_id[j]] != batch_idx) continue;
 
 			// Resample using conic matrix (cf. "Surface 
 			// Splatting" by Zwicker et al., 2001)
@@ -450,8 +460,10 @@ renderCUDA(
 
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++)
-				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
-			D += depths[collected_id[j]] * alpha * T;
+				C[ch] += collected_colors[ch * THREAD_SIZE + j] * alpha * T;
+			// for (int ch = 0; ch < CHANNELS; ch++)
+			// 	C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
+			// D += depths[collected_id[j]] * alpha * T;
 
 			T = test_T;
 
@@ -468,8 +480,8 @@ renderCUDA(
 		n_contrib[pix_id] = last_contributor;
 		for (int ch = 0; ch < CHANNELS; ch++)
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
-		out_depth[pix_id] = D;
-		out_trans[pix_id] = T;
+		// out_depth[pix_id] = D;
+		// out_trans[pix_id] = T;
 	}
 }
 

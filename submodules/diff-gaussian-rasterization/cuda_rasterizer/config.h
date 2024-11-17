@@ -24,7 +24,7 @@
 #define PRINT_CUDA_ARRAY(N, src) \
 	{ \
 		int temp[N]; \
-		cudaMemcpy(temp, src, sizeof(type) * N, cudaMemcpyDeviceToHost); \
+		cudaMemcpy(temp, src, sizeof(int) * N, cudaMemcpyDeviceToHost); \
 		for(int i=0; i<N; ++i){ \
 			printf("%d ", temp[i]); \
 		} \
@@ -53,7 +53,7 @@
 		} \
 	}
 
-// #define DEBUG
+#define DEBUG
 #ifdef DEBUG
     #define TIMEPRINT(fmt, ...) printf(fmt, ##__VA_ARGS__);
     #define PRINTLINE printf("End %s %d\n", __FILE__, __LINE__);

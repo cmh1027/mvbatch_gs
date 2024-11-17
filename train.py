@@ -155,8 +155,13 @@ def training(dataset, opt, pipe, args):
 			"grad_sep": opt.grad_sep,
 			"time_check": opt.time_check
 		} 
-		
+		if opt.time_check:
+			torch.cuda.synchronize()
+			start = time.time()
 		render_pkg = render(cams, gaussians, pipe, bg, **kwargs)
+		if opt.time_check:
+			torch.cuda.synchronize()
+			forward_time = time.time() - start
 
 		(image, depth, residual_trans, viewspace_point_tensor, visibility_filter, radii, log_buffer) = (
 			render_pkg["render"][:3, ...], 
@@ -202,14 +207,28 @@ def training(dataset, opt, pipe, args):
 			reg_loss = reg_loss + args.opacity_reg * gaussians.get_opacity.mean() 
 			reg_loss = reg_loss + args.scale_reg * gaussians.get_scaling.mean()
 		total_loss = loss + reg_loss
+
+		if opt.time_check:
+			torch.cuda.synchronize()
+			start = time.time()
 		total_loss.backward()
+		if opt.time_check:
+			torch.cuda.synchronize()
+			backward_time = time.time() - start
+			
 
 		if not opt.evaluate_time and iteration % 10 == 0:
 			tb_writer.add_scalar(f'time/forward/measure', log_buffer["forward_measureTime"], iteration)
+			tb_writer.add_scalar(f'time/forward/saveIndex', log_buffer["forward_saveIndexTime"], iteration)
 			tb_writer.add_scalar(f'time/forward/preprocess', log_buffer["forward_preprocessTime"], iteration)
+			tb_writer.add_scalar(f'time/forward/dup', log_buffer["forward_dupTime"], iteration)
+			tb_writer.add_scalar(f'time/forward/sort', log_buffer["forward_sortTime"], iteration)
+			tb_writer.add_scalar(f'time/forward/identify', log_buffer["forward_identifyTime"], iteration)
 			tb_writer.add_scalar(f'time/forward/render', log_buffer["forward_renderTime"], iteration)
 			tb_writer.add_scalar(f'time/backward/preprocess', log_buffer["backward_preprocessTime"], iteration)
 			tb_writer.add_scalar(f'time/backward/render', log_buffer["backward_renderTime"], iteration)
+			tb_writer.add_scalar(f'time/total/forward', forward_time, iteration)
+			tb_writer.add_scalar(f'time/total/backward', backward_time, iteration)
 
 
 		with torch.no_grad():
