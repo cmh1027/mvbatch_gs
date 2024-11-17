@@ -206,26 +206,25 @@ RasterizeGaussiansBackwardCUDA(
 	torch::Tensor dL_dconic = torch::zeros({BR, 2, 2}, means3D.options());
 	torch::Tensor dL_dcov3D = torch::zeros({BR, 6}, means3D.options());
 
-	torch::Tensor dL_dmeans3D = torch::zeros({P, 3}, means3D.options());
+	// torch::Tensor dL_dmeans3D = torch::zeros({P, 3}, means3D.options());
+	// torch::Tensor dL_dscales = torch::zeros({P, 3}, means3D.options());
+	// torch::Tensor dL_drotations = torch::zeros({P, 4}, means3D.options());
+	// torch::Tensor dL_dsh = torch::zeros({P, M, 3}, means3D.options());
+
 	torch::Tensor dL_dopacity = torch::zeros({P, 1}, means3D.options());
-	torch::Tensor dL_dscales = torch::zeros({P, 3}, means3D.options());
-	torch::Tensor dL_drotations = torch::zeros({P, 4}, means3D.options());
-	torch::Tensor dL_dsh = torch::zeros({P, M, 3}, means3D.options());
-
-	// torch::Tensor dL_dmeans3D = torch::zeros({BR, 3}, means3D.options());
-	// torch::Tensor dL_dopacity = torch::zeros({BR, 1}, means3D.options());
-	// torch::Tensor dL_dscales = torch::zeros({BR, 3}, means3D.options());
-	// torch::Tensor dL_drotations = torch::zeros({BR, 4}, means3D.options());
-	// torch::Tensor dL_dsh = torch::zeros({BR, M*3}, means3D.options());
-
 	torch::Tensor point_idx = torch::zeros({BR, 1}, means3D.options().dtype(torch::kInt32));
-	torch::Tensor dL_dmeans2D_sum = torch::zeros({P, 2}, means3D.options());
 
-	// torch::Tensor dL_dmeans3D_sum = torch::zeros({P, 3}, means3D.options());
-	// torch::Tensor dL_dopacity_sum = torch::zeros({P, 1}, means3D.options());
-	// torch::Tensor dL_dscales_sum = torch::zeros({P, 3}, means3D.options());
-	// torch::Tensor dL_drotations_sum = torch::zeros({P, 4}, means3D.options());
-	// torch::Tensor dL_dsh_sum = torch::zeros({P, M*3}, means3D.options());
+	torch::Tensor dL_dmeans3D = torch::zeros({BR, 3}, means3D.options());
+	torch::Tensor dL_dscales = torch::zeros({BR, 3}, means3D.options());
+	torch::Tensor dL_drotations = torch::zeros({BR, 4}, means3D.options());
+	torch::Tensor dL_dsh = torch::zeros({BR, M*3}, means3D.options());
+
+	torch::Tensor dL_dmeans2D_sum = torch::zeros({P, 2}, means3D.options());
+	torch::Tensor dL_dmeans3D_sum = torch::zeros({P, 3}, means3D.options());
+	torch::Tensor dL_dscales_sum = torch::zeros({P, 3}, means3D.options());
+	torch::Tensor dL_drotations_sum = torch::zeros({P, 4}, means3D.options());
+	torch::Tensor dL_dsh_sum = torch::zeros({P, M*3}, means3D.options());
+	
 
 	torch::Tensor denom = torch::zeros({P, 1}, means3D.options());
 
@@ -278,17 +277,11 @@ RasterizeGaussiansBackwardCUDA(
 
 		point_idx = point_idx.to(torch::kInt64);
 
-		// dL_dmeans3D_sum = dL_dmeans3D;
-		// dL_dopacity_sum = dL_dopacity;
-		// dL_dscales_sum = dL_dscales;
-		// dL_drotations_sum = dL_drotations;
-		// dL_dsh_sum = dL_dsh;
-		// dL_dmeans3D_sum.scatter_add_(0, point_idx.expand({-1, 1}), dL_dmeans3D);
-		// dL_dopacity_sum.scatter_add_(0, point_idx.expand({-1, 1}), dL_dopacity);
-		// dL_dscales_sum.scatter_add_(0, point_idx.expand({-1, 1}), dL_dscales);
-		// dL_drotations_sum.scatter_add_(0, point_idx.expand({-1, 1}), dL_drotations);
-		// dL_dsh_sum.scatter_add_(0, point_idx.expand({-1, 1}), dL_dsh);
-		// dL_dsh_sum = dL_dsh_sum.reshape({P, M, 3});
+		dL_dmeans3D_sum.scatter_add_(0, point_idx.expand({-1, 3}), dL_dmeans3D);
+		dL_dscales_sum.scatter_add_(0, point_idx.expand({-1, 3}), dL_dscales);
+		dL_drotations_sum.scatter_add_(0, point_idx.expand({-1, 4}), dL_drotations);
+		dL_dsh_sum.scatter_add_(0, point_idx.expand({-1, M*3}), dL_dsh);
+		dL_dsh_sum = dL_dsh_sum.reshape({P, M, 3});
 
 		denom.scatter_add_(0, point_idx.expand({-1, 1}),torch::ones_like(dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 1)})));
 
@@ -302,14 +295,14 @@ RasterizeGaussiansBackwardCUDA(
 		else{
 			torch::Tensor dL_dmeans2D_noabs = torch::zeros({P, 2}, means3D.options());
 			torch::Tensor dL_dmeans2D_abs = torch::zeros({P, 2}, means3D.options());
-			dL_dmeans2D_noabs.scatter_add_(0, point_idx.expand({-1, 1}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}));
-			dL_dmeans2D_abs.scatter_add_(0, point_idx.expand({-1, 1}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}));
+			dL_dmeans2D_noabs.scatter_add_(0, point_idx.expand({-1, 2}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}));
+			dL_dmeans2D_abs.scatter_add_(0, point_idx.expand({-1, 2}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}));
 			dL_dmeans2D_sum = torch::cat({dL_dmeans2D_noabs.norm(2, -1, true), dL_dmeans2D_abs.norm(2, -1, true)}, -1);
 		}
 	}
 	ERROR_CHECK
-  	// return std::make_tuple(dL_dmeans2D_sum, dL_dopacity_sum, dL_dmeans3D_sum, dL_dsh_sum, dL_dscales_sum, dL_drotations_sum, denom, preprocessTime, renderTime);
-	return std::make_tuple(dL_dmeans2D_sum, dL_dopacity, dL_dmeans3D, dL_dsh, dL_dscales, dL_drotations, denom, preprocessTime, renderTime);
+  	return std::make_tuple(dL_dmeans2D_sum, dL_dopacity, dL_dmeans3D_sum, dL_dsh_sum, dL_dscales_sum, dL_drotations_sum, denom, preprocessTime, renderTime);
+	// return std::make_tuple(dL_dmeans2D_sum, dL_dopacity, dL_dmeans3D, dL_dsh, dL_dscales, dL_drotations_sum, denom, preprocessTime, renderTime);
 }
 
 torch::Tensor markVisible(
