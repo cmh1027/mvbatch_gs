@@ -294,6 +294,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 	CacheState cacheState = CacheState::fromChunk(cache_chunkptr, P, B);
 	int BR;
 
+	if(time_check) cudaDeviceSynchronize();
 	start = clock();
 	CHECK_CUDA(FORWARD::measureBufferSize(
 		P, D, M, B,
@@ -330,6 +331,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 	char* img_chunkptr = imageBuffer(img_chunk_size);
 	ImageState imgState = ImageState::fromChunk(img_chunkptr, width * height);
 
+	if(time_check) cudaDeviceSynchronize();
 	start = clock();
 	CHECK_CUDA(FORWARD::preprocess(
 		BR, P, D, M,
@@ -414,6 +416,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 	ERROR_CHECK
 	// Let each tile blend its range of Gaussians independently in parallel
 
+	if(time_check) cudaDeviceSynchronize();
 	start = clock();
 	CHECK_CUDA(FORWARD::render(
 		render_tile_grid, render_block,
@@ -502,6 +505,7 @@ std::tuple<float, float> CudaRasterizer::Rasterizer::backward(
 	// Compute loss gradients w.r.t. 2D mean position, conic matrix,
 	// opacity and RGB of Gaussians from per-pixel loss gradients.
 	// If we were given precomputed colors and not SHs, use them.
+	if(time_check) cudaDeviceSynchronize();
 	start = clock();
 	CHECK_CUDA(BACKWARD::render(
 		render_tile_grid, render_block,
@@ -532,7 +536,7 @@ std::tuple<float, float> CudaRasterizer::Rasterizer::backward(
 	if(time_check) cudaDeviceSynchronize();
 	renderTime = (double)(clock() - start) / CLOCKS_PER_SEC;
 
-
+	if(time_check) cudaDeviceSynchronize();
 	start = clock();
 	CHECK_CUDA(BACKWARD::preprocess(P, D, M, BR,
 		(float3*)means3D,

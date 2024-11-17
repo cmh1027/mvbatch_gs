@@ -204,7 +204,7 @@ def training(dataset, opt, pipe, args):
 		total_loss = loss + reg_loss
 		total_loss.backward()
 
-		if not opt.evaluate_time and opt.time_check and iteration % 10 == 0:
+		if not opt.evaluate_time and iteration % 10 == 0:
 			tb_writer.add_scalar(f'time/forward/measure', log_buffer["forward_measureTime"], iteration)
 			tb_writer.add_scalar(f'time/forward/preprocess', log_buffer["forward_preprocessTime"], iteration)
 			tb_writer.add_scalar(f'time/forward/render', log_buffer["forward_renderTime"], iteration)
