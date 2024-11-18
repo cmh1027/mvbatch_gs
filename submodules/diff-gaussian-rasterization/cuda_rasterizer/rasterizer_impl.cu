@@ -249,6 +249,7 @@ CudaRasterizer::CacheState CudaRasterizer::CacheState::fromChunk(char*& chunk, s
 	obtain(chunk, cache.is_in_frustum, P*B, 128);
 	obtain(chunk, cache.depths, P*B, 128);
 	obtain(chunk, cache.cov3D, P, 128);
+	obtain(chunk, cache.cov2D, P*B, 128);
 	return cache;
 }
 
@@ -360,6 +361,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		cacheState.is_in_frustum,
 		cacheState.depths,
 		cacheState.cov3D,
+		cacheState.cov2D,
 		low_pass
 	), time_check, start, measureTime)
 
@@ -402,6 +404,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		radii,
 		geomState.means2D,
 		cacheState.cov3D,
+		cacheState.cov2D,
 		geomState.rgb,
 		geomState.conic_opacity,
 		tile_grid,

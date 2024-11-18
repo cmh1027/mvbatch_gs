@@ -43,6 +43,7 @@ namespace FORWARD
 		bool* is_in_frustum,
 		float* depths,
 		float6* cov3Ds,
+		float3* cov2Ds,
 		const float low_pass
 	);
 
@@ -66,6 +67,7 @@ namespace FORWARD
 		int* radii,
 		float2* points_xy_image,
 		const float6* cov3Ds,
+		const float3* cov2Ds,
 		float* colors,
 		float4* conic_opacity,
 		const dim3 grid,

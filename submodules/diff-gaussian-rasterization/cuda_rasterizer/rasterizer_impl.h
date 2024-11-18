@@ -37,6 +37,7 @@ namespace CudaRasterizer
 		bool* is_in_frustum;
 		float* depths;
 		float6* cov3D;
+		float3* cov2D;
 		
 		static CacheState fromChunk(char*& chunk, size_t P, size_t B);
 	};

@@ -208,6 +208,7 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	const float* focal_x, 
 	const float* focal_y,
 	const float6* cov3Ds,
+	float3* cov2Ds,
 	const bool* is_in_frustum,
 	const dim3 grid,
 	const int* mask,
@@ -243,6 +244,7 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	uint32_t vertial_blocks = (H + BLOCK_Y - 1) / BLOCK_Y;
 
 	float3 cov = computeCov2D(p_orig, focal_x[batch_idx], focal_y[batch_idx], tan_fovx[batch_idx], tan_fovy[batch_idx], cov3Ds[idx], viewmatrix, low_pass);
+	cov2Ds[abs_idx] = cov;
 
 	float det = (cov.x * cov.z - cov.y * cov.y);
 	if (det == 0.0f)
@@ -283,6 +285,7 @@ __global__ void preprocessCUDA(int BR, int P, int B, int D, int M,
 	int* radii,
 	float2* points_xy_image,
 	const float6* cov3Ds,
+	const float3* cov2Ds,
 	float* rgb,
 	float4* conic_opacity,
 	const dim3 grid,
@@ -323,7 +326,8 @@ __global__ void preprocessCUDA(int BR, int P, int B, int D, int M,
 	points_xy_image[idx] = point_image;
 
 	// Compute 2D screen-space covariance matrix
-	float3 cov = computeCov2D(p_orig, focal_x[batch_idx], focal_y[batch_idx], tan_fovx[batch_idx], tan_fovy[batch_idx], cov3Ds[point_idx], viewmatrix, low_pass);
+	// float3 cov = computeCov2D(p_orig, focal_x[batch_idx], focal_y[batch_idx], tan_fovx[batch_idx], tan_fovy[batch_idx], cov3Ds[point_idx], viewmatrix, low_pass);
+	float3 cov = cov2Ds[abs_idx];
 
 	// Invert covariance (EWA algorithm)
 	float det = (cov.x * cov.z - cov.y * cov.y);
@@ -592,6 +596,7 @@ void FORWARD::preprocess(int BR, int P, int B, int D, int M,
 	int* radii,
 	float2* means2D,
 	const float6* cov3Ds,
+	const float3* cov2Ds,
 	float* rgb,
 	float4* conic_opacity,
 	const dim3 grid,
@@ -621,6 +626,7 @@ void FORWARD::preprocess(int BR, int P, int B, int D, int M,
 		radii,
 		means2D,
 		cov3Ds,
+		cov2Ds,
 		rgb,
 		conic_opacity,
 		grid,
@@ -654,6 +660,7 @@ void FORWARD::measureBufferSize(
 	bool* is_in_frustum,
 	float* depths,
 	float6* cov3Ds,
+	float3* cov2Ds,
 	const float low_pass
 )
 {
@@ -687,6 +694,7 @@ void FORWARD::measureBufferSize(
 		tan_fovx, tan_fovy,
 		focal_x, focal_y,
 		cov3Ds,
+		cov2Ds,
 		is_in_frustum,
 		grid,
 		mask,
