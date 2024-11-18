@@ -294,7 +294,7 @@ CudaRasterizer::BinningState CudaRasterizer::BinningState::fromChunk(char*& chun
 
 // Forward rendering procedure for differentiable rasterization
 // of Gaussians.
-std::tuple<int, int, float, float, float, float, float, float, float> CudaRasterizer::Rasterizer::forward(
+std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 	std::function<char* (size_t)> geometryBuffer,
 	std::function<char* (size_t)> binningBuffer,
 	std::function<char* (size_t)> imageBuffer,
@@ -325,7 +325,7 @@ std::tuple<int, int, float, float, float, float, float, float, float> CudaRaster
 	bool debug)
 {
 	clock_t start;
-	double measureTime, saveIndexTime, preprocessTime, dupTime, sortTime, identifyTime, renderTime;
+	double measureTime, preprocessTime, renderTime;
 
 	const dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
 	const dim3 block(BLOCK_X, BLOCK_Y, 1);
@@ -367,12 +367,12 @@ std::tuple<int, int, float, float, float, float, float, float, float> CudaRaster
 	char* chunkptr = geometryBuffer(chunk_size);
 	GeometryState geomState = GeometryState::fromChunk(chunkptr, BR);
 	
-	TIME_CHECK(savePointIndex(P, B,
+	savePointIndex(P, B,
 		cacheState.batch_num_rendered_sums, 
 		cacheState.batch_rendered_check, 
 		geomState.point_index, 
 		geomState.point_batch_index
-	), time_check, start, saveIndexTime)
+	);
 
 	size_t img_chunk_size = required<ImageState>(width * height);
 	char* img_chunkptr = imageBuffer(img_chunk_size);
@@ -423,7 +423,7 @@ std::tuple<int, int, float, float, float, float, float, float, float> CudaRaster
 
 	// For each instance to be rendered, produce adequate [ tile | depth ] key 
 	// and corresponding dublicated Gaussian indices to be sorted
-	TIME_CHECK(duplicateWithKeys(
+	duplicateWithKeys(
 		BR, P, B, width,
 		geomState.means2D,
 		geomState.depths,
@@ -434,28 +434,28 @@ std::tuple<int, int, float, float, float, float, float, float, float> CudaRaster
 		tile_grid,
 		geomState.point_index,
 		geomState.point_batch_index
-	), time_check, start, dupTime)
+	);
 	
 	int bit = getHigherMsb(tile_grid.x * tile_grid.y);
 
 	// Sort complete list of (duplicated) Gaussian indices by keys
-	TIME_CHECK(cub::DeviceRadixSort::SortPairs(
+	cub::DeviceRadixSort::SortPairs(
 		binningState.list_sorting_space,
 		binningState.sorting_size,
 		binningState.point_list_keys_unsorted, binningState.point_list_keys,
 		binningState.point_list_unsorted, binningState.point_list,
 		num_rendered, 0, 48 + bit
-	), time_check, start, sortTime)
+	);
 
 	cudaMemset(imgState.ranges, 0, tile_grid.x * tile_grid.y * sizeof(uint2));
 
 	// Identify start and end of per-tile workloads in sorted list
 	if (num_rendered > 0){
-		TIME_CHECK(identifyTileRanges(
+		identifyTileRanges(
 			num_rendered, B,
 			binningState.point_list_keys,
 			imgState.ranges
-		), time_check, start, identifyTime)
+		);
 	}
 
 	ERROR_CHECK
@@ -482,7 +482,7 @@ std::tuple<int, int, float, float, float, float, float, float, float> CudaRaster
 	), time_check, start, renderTime)
 
 
-	return std::make_tuple(num_rendered, BR, measureTime, saveIndexTime, preprocessTime, dupTime, sortTime, identifyTime, renderTime);
+	return std::make_tuple(num_rendered, BR, measureTime, preprocessTime, renderTime);
 }
 
 // Produce necessary gradients for optimization, corresponding

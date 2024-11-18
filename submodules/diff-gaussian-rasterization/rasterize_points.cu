@@ -34,7 +34,7 @@ std::function<char*(size_t N)> resizeFunctional(torch::Tensor& t) {
     return lambda;
 }
 
-std::tuple<int, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, float, float, float, float, float, float, float>
+std::tuple<int, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, float, float, float>
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
@@ -142,14 +142,10 @@ RasterizeGaussiansCUDA(
 		rendered = std::get<0>(returned);
 		batch_rendered = std::get<1>(returned);
 		measureTime = std::get<2>(returned);
-		saveIndexTime = std::get<3>(returned);
-		preprocessTime = std::get<4>(returned);
-		dupTime = std::get<5>(returned);
-		sortTime = std::get<6>(returned);
-		identifyTime = std::get<7>(returned);
-		renderTime = std::get<8>(returned);
+		preprocessTime = std::get<3>(returned);
+		renderTime = std::get<4>(returned);
 	}
-	return std::make_tuple(rendered, batch_rendered, out_color, out_depth, out_trans, radii, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask, measureTime, saveIndexTime, preprocessTime, dupTime, sortTime, identifyTime, renderTime);
+	return std::make_tuple(rendered, batch_rendered, out_color, out_depth, out_trans, radii, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask, measureTime, preprocessTime, renderTime);
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, float, float>
@@ -205,11 +201,6 @@ RasterizeGaussiansBackwardCUDA(
 	torch::Tensor dL_ddepths = torch::zeros({BR, 1}, means3D.options());
 	torch::Tensor dL_dconic = torch::zeros({BR, 2, 2}, means3D.options());
 	torch::Tensor dL_dcov3D = torch::zeros({BR, 6}, means3D.options());
-
-	// torch::Tensor dL_dmeans3D = torch::zeros({P, 3}, means3D.options());
-	// torch::Tensor dL_dscales = torch::zeros({P, 3}, means3D.options());
-	// torch::Tensor dL_drotations = torch::zeros({P, 4}, means3D.options());
-	// torch::Tensor dL_dsh = torch::zeros({P, M, 3}, means3D.options());
 
 	torch::Tensor dL_dopacity = torch::zeros({P, 1}, means3D.options());
 	torch::Tensor point_idx = torch::zeros({BR, 1}, means3D.options().dtype(torch::kInt32));
@@ -302,7 +293,6 @@ RasterizeGaussiansBackwardCUDA(
 	}
 	ERROR_CHECK
   	return std::make_tuple(dL_dmeans2D_sum, dL_dopacity, dL_dmeans3D_sum, dL_dsh_sum, dL_dscales_sum, dL_drotations_sum, denom, preprocessTime, renderTime);
-	// return std::make_tuple(dL_dmeans2D_sum, dL_dopacity, dL_dmeans3D, dL_dsh, dL_dscales, dL_drotations_sum, denom, preprocessTime, renderTime);
 }
 
 torch::Tensor markVisible(

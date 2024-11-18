@@ -219,11 +219,7 @@ def training(dataset, opt, pipe, args):
 
 		if not opt.evaluate_time and iteration % 10 == 0:
 			tb_writer.add_scalar(f'time/forward/measure', log_buffer["forward_measureTime"], iteration)
-			tb_writer.add_scalar(f'time/forward/saveIndex', log_buffer["forward_saveIndexTime"], iteration)
 			tb_writer.add_scalar(f'time/forward/preprocess', log_buffer["forward_preprocessTime"], iteration)
-			tb_writer.add_scalar(f'time/forward/dup', log_buffer["forward_dupTime"], iteration)
-			tb_writer.add_scalar(f'time/forward/sort', log_buffer["forward_sortTime"], iteration)
-			tb_writer.add_scalar(f'time/forward/identify', log_buffer["forward_identifyTime"], iteration)
 			tb_writer.add_scalar(f'time/forward/render', log_buffer["forward_renderTime"], iteration)
 			tb_writer.add_scalar(f'time/backward/preprocess', log_buffer["backward_preprocessTime"], iteration)
 			tb_writer.add_scalar(f'time/backward/render', log_buffer["backward_renderTime"], iteration)

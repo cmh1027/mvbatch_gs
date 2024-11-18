@@ -86,22 +86,14 @@ class _RasterizeGaussians(torch.autograd.Function):
             imgBuffer, 
             mask,
             measureTime, 
-            saveIndexTime,
             preprocessTime, 
-            dupTime, 
-            sortTime, 
-            identifyTime, 
             renderTime
         ) = _C.rasterize_gaussians(*args)
 
         raster_settings.log_buffer["R"] = num_rendered
         raster_settings.log_buffer["BR"] = batch_num_rendered
         raster_settings.log_buffer["forward_measureTime"] = measureTime
-        raster_settings.log_buffer["forward_saveIndexTime"] = saveIndexTime
         raster_settings.log_buffer["forward_preprocessTime"] = preprocessTime
-        raster_settings.log_buffer["forward_dupTime"] = dupTime
-        raster_settings.log_buffer["forward_sortTime"] = sortTime
-        raster_settings.log_buffer["forward_identifyTime"] = identifyTime
         raster_settings.log_buffer["forward_renderTime"] = renderTime
         # Keep relevant tensors for backward
         ctx.raster_settings = raster_settings

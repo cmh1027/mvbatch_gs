@@ -28,7 +28,7 @@ namespace CudaRasterizer
 			float* projmatrix,
 			bool* present);
 
-		static std::tuple<int, int, float, float, float, float, float, float, float> forward(
+		static std::tuple<int, int, float, float, float> forward(
 			std::function<char* (size_t)> geometryBuffer,
 			std::function<char* (size_t)> binningBuffer,
 			std::function<char* (size_t)> imageBuffer,
