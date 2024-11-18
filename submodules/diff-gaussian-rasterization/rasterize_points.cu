@@ -78,7 +78,7 @@ RasterizeGaussiansCUDA(
 	auto int_opts = means3D.options().dtype(torch::kInt32);
 	auto float_opts = means3D.options().dtype(torch::kFloat32);
 
-	torch::Tensor out_color = torch::full({NUM_CHANNELS, H, W}, 0.0, float_opts);
+	torch::Tensor out_color = torch::full({CHANNELS, H, W}, 0.0, float_opts);
 	torch::Tensor out_depth = torch::full({1, H, W}, 0.0, float_opts);
 	torch::Tensor out_trans = torch::full({1, H, W}, 0.0, float_opts);
 	torch::Tensor radii = torch::full({B, P}, 0, means3D.options().dtype(torch::kInt32));
@@ -197,7 +197,7 @@ RasterizeGaussiansBackwardCUDA(
 	torch::Tensor dL_dmeans2D_sq = torch::zeros({BR, 1}, means3D.options());
 	torch::Tensor dL_dmeans2D_N = torch::full({BR, 1}, 1e-6, means3D.options());
 	
-	torch::Tensor dL_dcolors = torch::zeros({BR, NUM_CHANNELS}, means3D.options());
+	torch::Tensor dL_dcolors = torch::zeros({BR, CHANNELS}, means3D.options());
 	torch::Tensor dL_ddepths = torch::zeros({BR, 1}, means3D.options());
 	torch::Tensor dL_dconic = torch::zeros({BR, 2, 2}, means3D.options());
 	torch::Tensor dL_dcov3D = torch::zeros({BR, 6}, means3D.options());

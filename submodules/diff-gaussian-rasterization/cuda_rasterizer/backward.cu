@@ -145,7 +145,7 @@ __device__ void computeColorFromSH(int idx, int point_idx, int deg, int max_coef
 __global__ void computeCov2DCUDA(int BR, int P,
 	const float3* means,
 	const int* radii,
-	const float* cov3Ds,
+	const float6* cov3Ds,
 	const float* h_x, 
 	const float* h_y,
 	const float* tan_fovx, 
@@ -153,7 +153,7 @@ __global__ void computeCov2DCUDA(int BR, int P,
 	const float* view_matrix,
 	const float* dL_dconics,
 	float3* dL_dmeans,
-	float* dL_dcov,
+	float6* dL_dcov,
 	const int* mask,
 	const int* point_index,
 	const int* point_batch_index,
@@ -172,7 +172,7 @@ __global__ void computeCov2DCUDA(int BR, int P,
 		return;
 
 	// Reading location of 3D covariance for this Gaussian
-	const float* cov3D = cov3Ds + 6 * idx;
+	const float6 cov3D = cov3Ds[idx];
 
 	// Fetch gradients, recompute 2D covariance and relevant 
 	// intermediate forward results needed in the backward.
@@ -200,9 +200,9 @@ __global__ void computeCov2DCUDA(int BR, int P,
 		view_matrix[2], view_matrix[6], view_matrix[10]);
 
 	glm::mat3 Vrk = glm::mat3(
-		cov3D[0], cov3D[1], cov3D[2],
-		cov3D[1], cov3D[3], cov3D[4],
-		cov3D[2], cov3D[4], cov3D[5]);
+		cov3D.x, cov3D.y, cov3D.z,
+		cov3D.y, cov3D.w, cov3D.a,
+		cov3D.z, cov3D.a, cov3D.b);
 
 	glm::mat3 T = W * J;
 
@@ -229,24 +229,29 @@ __global__ void computeCov2DCUDA(int BR, int P,
 		// Gradients of loss L w.r.t. each 3D covariance matrix (Vrk) entry, 
 		// given gradients w.r.t. 2D covariance matrix (diagonal).
 		// cov2D = transpose(T) * transpose(Vrk) * T;
-		dL_dcov[6 * idx + 0] = (T[0][0] * T[0][0] * dL_da + T[0][0] * T[1][0] * dL_db + T[1][0] * T[1][0] * dL_dc);
-		dL_dcov[6 * idx + 3] = (T[0][1] * T[0][1] * dL_da + T[0][1] * T[1][1] * dL_db + T[1][1] * T[1][1] * dL_dc);
-		dL_dcov[6 * idx + 5] = (T[0][2] * T[0][2] * dL_da + T[0][2] * T[1][2] * dL_db + T[1][2] * T[1][2] * dL_dc);
+		dL_dcov[idx].x = (T[0][0] * T[0][0] * dL_da + T[0][0] * T[1][0] * dL_db + T[1][0] * T[1][0] * dL_dc);
+		dL_dcov[idx].w = (T[0][1] * T[0][1] * dL_da + T[0][1] * T[1][1] * dL_db + T[1][1] * T[1][1] * dL_dc);
+		dL_dcov[idx].b = (T[0][2] * T[0][2] * dL_da + T[0][2] * T[1][2] * dL_db + T[1][2] * T[1][2] * dL_dc);
 
 
 		// Gradients of loss L w.r.t. each 3D covariance matrix (Vrk) entry, 
 		// given gradients w.r.t. 2D covariance matrix (off-diagonal).
 		// Off-diagonal elements appear twice --> double the gradient.
 		// cov2D = transpose(T) * transpose(Vrk) * T;
-		dL_dcov[6 * idx + 1] = 2 * T[0][0] * T[0][1] * dL_da + (T[0][0] * T[1][1] + T[0][1] * T[1][0]) * dL_db + 2 * T[1][0] * T[1][1] * dL_dc;
-		dL_dcov[6 * idx + 2] = 2 * T[0][0] * T[0][2] * dL_da + (T[0][0] * T[1][2] + T[0][2] * T[1][0]) * dL_db + 2 * T[1][0] * T[1][2] * dL_dc;
-		dL_dcov[6 * idx + 4] = 2 * T[0][2] * T[0][1] * dL_da + (T[0][1] * T[1][2] + T[0][2] * T[1][1]) * dL_db + 2 * T[1][1] * T[1][2] * dL_dc;
+		dL_dcov[idx].y = 2 * T[0][0] * T[0][1] * dL_da + (T[0][0] * T[1][1] + T[0][1] * T[1][0]) * dL_db + 2 * T[1][0] * T[1][1] * dL_dc;
+		dL_dcov[idx].z = 2 * T[0][0] * T[0][2] * dL_da + (T[0][0] * T[1][2] + T[0][2] * T[1][0]) * dL_db + 2 * T[1][0] * T[1][2] * dL_dc;
+		dL_dcov[idx].a = 2 * T[0][2] * T[0][1] * dL_da + (T[0][1] * T[1][2] + T[0][2] * T[1][1]) * dL_db + 2 * T[1][1] * T[1][2] * dL_dc;
 
 	}
 	else
 	{
-		for (int i = 0; i < 6; i++)
-			dL_dcov[6 * idx + i] = 0;
+
+		dL_dcov[idx].x = 0;
+		dL_dcov[idx].y = 0;
+		dL_dcov[idx].z = 0;
+		dL_dcov[idx].w = 0;
+		dL_dcov[idx].a = 0;
+		dL_dcov[idx].b = 0;
 	}
 
 	// Gradients of loss w.r.t. upper 2x3 portion of intermediate matrix T
@@ -292,7 +297,7 @@ __global__ void computeCov2DCUDA(int BR, int P,
 
 // Backward pass for the conversion of scale and rotation to a 
 // 3D covariance matrix for each Gaussian. 
-__device__ void computeCov3D(int idx, int point_idx, const glm::vec3 scale, float mod, const glm::vec4 rot, const float* dL_dcov3Ds, glm::vec3* dL_dscales, glm::vec4* dL_drots)
+__device__ void computeCov3D(int idx, int point_idx, const glm::vec3 scale, float mod, const glm::vec4 rot, const float6& dL_dcov3D, glm::vec3* dL_dscales, glm::vec4* dL_drots)
 {
 	// Recompute (intermediate) results for the 3D covariance computation.
 	glm::vec4 q = rot;
@@ -316,13 +321,11 @@ __device__ void computeCov3D(int idx, int point_idx, const glm::vec3 scale, floa
 
 	glm::mat3 M = S * R;
 
-	const float* dL_dcov3D = dL_dcov3Ds + 6 * idx;
-
 	// Convert per-element covariance loss gradients to matrix form
 	glm::mat3 dL_dSigma = glm::mat3(
-		dL_dcov3D[0], 0.5f * dL_dcov3D[1], 0.5f * dL_dcov3D[2],
-		0.5f * dL_dcov3D[1], dL_dcov3D[3], 0.5f * dL_dcov3D[4],
-		0.5f * dL_dcov3D[2], 0.5f * dL_dcov3D[4], dL_dcov3D[5]
+		dL_dcov3D.x, 0.5f * dL_dcov3D.y, 0.5f * dL_dcov3D.z,
+		0.5f * dL_dcov3D.y, dL_dcov3D.w, 0.5f * dL_dcov3D.a,
+		0.5f * dL_dcov3D.z, 0.5f * dL_dcov3D.a, dL_dcov3D.b
 	);
 
 	// Compute loss gradient w.r.t. matrix M
@@ -335,10 +338,10 @@ __device__ void computeCov3D(int idx, int point_idx, const glm::vec3 scale, floa
 	// Gradients of loss w.r.t. scale
 	
 	// glm::vec3* dL_dscale = dL_dscales + point_idx;
-	glm::vec3* dL_dscale = dL_dscales + idx;
-	dL_dscale->x = glm::dot(Rt[0], dL_dMt[0]);
-	dL_dscale->y = glm::dot(Rt[1], dL_dMt[1]);
-	dL_dscale->z = glm::dot(Rt[2], dL_dMt[2]);
+	glm::vec3& dL_dscale = dL_dscales[idx];
+	dL_dscale.x = glm::dot(Rt[0], dL_dMt[0]);
+	dL_dscale.y = glm::dot(Rt[1], dL_dMt[1]);
+	dL_dscale.z = glm::dot(Rt[2], dL_dMt[2]);
 
 	dL_dMt[0] *= s.x;
 	dL_dMt[1] *= s.y;
@@ -377,7 +380,7 @@ __global__ void preprocessCUDA(
 	glm::vec3* dL_dmeans,
 	float* dL_dcolor,
 	float* dL_ddepth,
-	float* dL_dcov3D,
+	float6* dL_dcov3D,
 	float* dL_dsh,
 	glm::vec3* dL_dscale,
 	glm::vec4* dL_drot,
@@ -436,7 +439,7 @@ __global__ void preprocessCUDA(
 	
 	// Compute gradient updates due to computing covariance from scale/rotation
 	if (scales)
-		computeCov3D(idx, point_idx, scales[point_idx], scale_modifier, rotations[point_idx], dL_dcov3D, dL_dscale, dL_drot);
+		computeCov3D(idx, point_idx, scales[point_idx], scale_modifier, rotations[point_idx], dL_dcov3D[idx], dL_dscale, dL_drot);
 }
 
 // Backward version of the rendering procedure.
@@ -674,7 +677,7 @@ void BACKWARD::preprocess(
 	const glm::vec3* scales,
 	const glm::vec4* rotations,
 	const float scale_modifier,
-	const float* cov3Ds,
+	const float6* cov3Ds,
 	const float* viewmatrix,
 	const float* projmatrix,
 	const float* focal_x, 
@@ -686,7 +689,7 @@ void BACKWARD::preprocess(
 	glm::vec3* dL_dmean3D,
 	float* dL_dcolor,
 	float* dL_ddepth,
-	float* dL_dcov3D,
+	float6* dL_dcov3D,
 	float* dL_dsh,
 	glm::vec3* dL_dscale,
 	glm::vec4* dL_drot,
@@ -723,7 +726,7 @@ void BACKWARD::preprocess(
 	// Propagate gradients for remaining steps: finish 3D mean gradients,
 	// propagate color gradients to SH (if desireD), propagate 3D covariance
 	// matrix gradients to scale and rotation.
-	preprocessCUDA<NUM_CHANNELS> << < (BR + 255) / 256, 256 >> > (
+	preprocessCUDA<CHANNELS> << < (BR + 255) / 256, 256 >> > (
 		BR, P, D, M,
 		(float3*)means3D,
 		radii,
@@ -777,28 +780,28 @@ void BACKWARD::render(
 {
 	switch(B){
 		case 1:
-			renderCUDA<NUM_CHANNELS, 1> << <grid, block >> >(
+			renderCUDA<CHANNELS, 1> << <grid, block >> >(
 				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, depths, final_Ts, n_contrib, 
 				dL_dpixels, dL_dpixel_depths, dL_dpixel_trans, dL_dmean2D, dL_dmean2D_sq, dL_dmean2D_N, dL_dconic2D, dL_dopacity, dL_dcolor, dL_ddepths,
 				mask, point_index, point_batch_index
 			);
 			break;
 		case 2:
-			renderCUDA<NUM_CHANNELS, 2> << <grid, block >> >(
+			renderCUDA<CHANNELS, 2> << <grid, block >> >(
 				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, depths, final_Ts, n_contrib, 
 				dL_dpixels, dL_dpixel_depths, dL_dpixel_trans, dL_dmean2D, dL_dmean2D_sq, dL_dmean2D_N, dL_dconic2D, dL_dopacity, dL_dcolor, dL_ddepths,
 				mask, point_index, point_batch_index
 			);
 			break;
 		case 4:
-			renderCUDA<NUM_CHANNELS, 4> << <grid, block >> >(
+			renderCUDA<CHANNELS, 4> << <grid, block >> >(
 				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, depths, final_Ts, n_contrib, 
 				dL_dpixels, dL_dpixel_depths, dL_dpixel_trans, dL_dmean2D, dL_dmean2D_sq, dL_dmean2D_N, dL_dconic2D, dL_dopacity, dL_dcolor, dL_ddepths,
 				mask, point_index, point_batch_index
 			);
 			break;
 		case 8:
-			renderCUDA<NUM_CHANNELS, 8> << <grid, block >> >(
+			renderCUDA<CHANNELS, 8> << <grid, block >> >(
 				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, depths, final_Ts, n_contrib, 
 				dL_dpixels, dL_dpixel_depths, dL_dpixel_trans, dL_dmean2D, dL_dmean2D_sq, dL_dmean2D_N, dL_dconic2D, dL_dopacity, dL_dcolor, dL_ddepths,
 				mask, point_index, point_batch_index

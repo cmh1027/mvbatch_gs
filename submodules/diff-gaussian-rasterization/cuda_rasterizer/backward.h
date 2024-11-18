@@ -17,6 +17,7 @@
 #include "device_launch_parameters.h"
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
+#include "auxiliary.h"
 
 namespace BACKWARD
 {
@@ -56,7 +57,7 @@ namespace BACKWARD
 		const glm::vec3* scales,
 		const glm::vec4* rotations,
 		const float scale_modifier,
-		const float* cov3Ds,
+		const float6* cov3Ds,
 		const float* view,
 		const float* proj,
 		const float* focal_x, 
@@ -69,7 +70,7 @@ namespace BACKWARD
 		glm::vec3* dL_dmeans,
 		float* dL_dcolor,
 		float* dL_ddepth,
-		float* dL_dcov3D,
+		float6* dL_dcov3D,
 		float* dL_dsh,
 		glm::vec3* dL_dscale,
 		glm::vec4* dL_drot,

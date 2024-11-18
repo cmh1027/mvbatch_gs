@@ -15,7 +15,7 @@
 #include <vector>
 #include "rasterizer.h"
 #include <cuda_runtime_api.h>
-
+#include "auxiliary.h"
 namespace CudaRasterizer
 {
 	template <typename T>
@@ -45,7 +45,7 @@ namespace CudaRasterizer
 		bool* clamped;
 		int* internal_radii;
 		float2* means2D;
-		float* cov3D;
+		float6* cov3D;
 		float4* conic_opacity;
 		float* rgb;
 		uint32_t* point_offsets;

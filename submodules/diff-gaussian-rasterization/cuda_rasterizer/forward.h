@@ -17,6 +17,7 @@
 #include "device_launch_parameters.h"
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
+#include "auxiliary.h"
 
 namespace FORWARD
 {
@@ -61,7 +62,7 @@ namespace FORWARD
 		int* radii,
 		float2* points_xy_image,
 		float* depths,
-		float* cov3Ds,
+		float6* cov3Ds,
 		float* colors,
 		float4* conic_opacity,
 		const dim3 grid,

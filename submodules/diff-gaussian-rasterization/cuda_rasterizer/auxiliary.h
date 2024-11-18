@@ -162,6 +162,12 @@ __forceinline__ __device__ bool in_frustum(int idx,
 }
 
 
+
+struct float6
+{
+    float x, y, z, w, a, b;
+};
+
 #define CHECK_CUDA(A, debug) \
 A; if(debug) { \
 auto ret = cudaDeviceSynchronize(); \

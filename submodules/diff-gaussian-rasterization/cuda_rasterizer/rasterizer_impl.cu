@@ -254,7 +254,7 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 	obtain(chunk, geom.depths, BR, 128);
 	obtain(chunk, geom.clamped, BR * 3, 128);
 	obtain(chunk, geom.means2D, BR, 128);
-	obtain(chunk, geom.cov3D, BR * 6, 128);
+	obtain(chunk, geom.cov3D, BR, 128);
 	obtain(chunk, geom.conic_opacity, BR, 128);
 	obtain(chunk, geom.rgb, BR * 3, 128);
 	obtain(chunk, geom.point_index, BR, 128);
@@ -599,7 +599,7 @@ std::tuple<float, float> CudaRasterizer::Rasterizer::backward(
 		(glm::vec3*)dL_dmean3D,
 		dL_dcolor,
 		dL_ddepth,
-		dL_dcov3D,
+		(float6*)dL_dcov3D,
 		dL_dsh,
 		(glm::vec3*)dL_dscale,
 		(glm::vec4*)dL_drot,

@@ -217,7 +217,7 @@ def training(dataset, opt, pipe, args):
 			backward_time = time.time() - start
 			
 
-		if not opt.evaluate_time and iteration % 10 == 0:
+		if opt.time_check and not opt.evaluate_time and iteration % 10 == 0:
 			tb_writer.add_scalar(f'time/forward/measure', log_buffer["forward_measureTime"], iteration)
 			tb_writer.add_scalar(f'time/forward/preprocess', log_buffer["forward_preprocessTime"], iteration)
 			tb_writer.add_scalar(f'time/forward/render', log_buffer["forward_renderTime"], iteration)

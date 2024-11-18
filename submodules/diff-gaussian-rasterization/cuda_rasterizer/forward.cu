@@ -71,7 +71,7 @@ __device__ glm::vec3 computeColorFromSH(int idx, int point_idx, int deg, int max
 }
 
 // Forward version of 2D covariance matrix computation
-__device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y, float tan_fovx, float tan_fovy, const float* cov3D, const float* viewmatrix, const float low_pass)
+__device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y, float tan_fovx, float tan_fovy, const float6& cov3D, const float* viewmatrix, const float low_pass)
 {
 	// The following models the steps outlined by equations 29
 	// and 31 in "EWA Splatting" (Zwicker et al., 2002). 
@@ -99,9 +99,9 @@ __device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y,
 	glm::mat3 T = W * J;
 
 	glm::mat3 Vrk = glm::mat3(
-		cov3D[0], cov3D[1], cov3D[2],
-		cov3D[1], cov3D[3], cov3D[4],
-		cov3D[2], cov3D[4], cov3D[5]);
+		cov3D.x, cov3D.y, cov3D.z,
+		cov3D.y, cov3D.w, cov3D.a,
+		cov3D.z, cov3D.a, cov3D.b);
 
 	glm::mat3 cov = glm::transpose(T) * glm::transpose(Vrk) * T;
 
@@ -115,7 +115,7 @@ __device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y,
 // Forward method for converting scale and rotation properties of each
 // Gaussian to a 3D covariance matrix in world space. Also takes care
 // of quaternion normalization.
-__device__ void computeCov3D(const glm::vec3 scale, float mod, const glm::vec4 rot, float* cov3D)
+__device__ void computeCov3D(const glm::vec3 scale, float mod, const glm::vec4 rot, float6& cov3D)
 {
 	// Create scaling matrix
 	glm::mat3 S = glm::mat3(1.0f);
@@ -143,12 +143,12 @@ __device__ void computeCov3D(const glm::vec3 scale, float mod, const glm::vec4 r
 	glm::mat3 Sigma = glm::transpose(M) * M;
 
 	// Covariance is symmetric, only store upper right
-	cov3D[0] = Sigma[0][0];
-	cov3D[1] = Sigma[0][1];
-	cov3D[2] = Sigma[0][2];
-	cov3D[3] = Sigma[1][1];
-	cov3D[4] = Sigma[1][2];
-	cov3D[5] = Sigma[2][2];
+	cov3D.x = Sigma[0][0];
+	cov3D.y = Sigma[0][1];
+	cov3D.z = Sigma[0][2];
+	cov3D.w = Sigma[1][1];
+	cov3D.a = Sigma[1][2];
+	cov3D.b = Sigma[2][2];
 }
 
 __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
@@ -196,7 +196,7 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
 	uint32_t vertial_blocks = (H + BLOCK_Y - 1) / BLOCK_Y;
 
-	float cov3D_temp[6];
+	float6 cov3D_temp;
 	computeCov3D(scales[idx], scale_modifier, rotations[idx], cov3D_temp);
 	float3 cov = computeCov2D(p_orig, focal_x[batch_idx], focal_y[batch_idx], tan_fovx[batch_idx], tan_fovy[batch_idx], cov3D_temp, viewmatrix, low_pass);
 
@@ -238,7 +238,7 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	int* radii,
 	float2* points_xy_image,
 	float* depths,
-	float* cov3Ds,
+	float6* cov3Ds,
 	float* rgb,
 	float4* conic_opacity,
 	const dim3 grid,
@@ -277,13 +277,10 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	uint32_t vertial_blocks = (H + BLOCK_Y - 1) / BLOCK_Y;
 	points_xy_image[idx] = point_image;
 
-	const float* cov3D;
-	computeCov3D(scales[point_idx], scale_modifier, rotations[point_idx], cov3Ds + idx * 6);
-	cov3D = cov3Ds + idx * 6;
-
+	computeCov3D(scales[point_idx], scale_modifier, rotations[point_idx], cov3Ds[idx]);
 
 	// Compute 2D screen-space covariance matrix
-	float3 cov = computeCov2D(p_orig, focal_x[batch_idx], focal_y[batch_idx], tan_fovx[batch_idx], tan_fovy[batch_idx], cov3D, viewmatrix, low_pass);
+	float3 cov = computeCov2D(p_orig, focal_x[batch_idx], focal_y[batch_idx], tan_fovx[batch_idx], tan_fovy[batch_idx], cov3Ds[idx], viewmatrix, low_pass);
 
 	// Invert covariance (EWA algorithm)
 	float det = (cov.x * cov.z - cov.y * cov.y);
@@ -325,7 +322,7 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 // Main rasterization method. Collaboratively works on one tile per
 // block, each thread treats one pixel. Alternates between fetching 
 // and rasterizing data.
-template <uint32_t CHANNELS, int BATCH>
+template <uint32_t C, int BATCH>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 renderCUDA(
 	const uint2* __restrict__ ranges,
@@ -346,7 +343,7 @@ renderCUDA(
 {
 	// Identify current tile and associated min/max pixel range.
 	static constexpr int THREAD_SIZE = BLOCK_SIZE / BATCH;
-	static constexpr int THREAD_SIZE_COLOR = BLOCK_SIZE * CHANNELS / BATCH;
+	static constexpr int THREAD_SIZE_COLOR = BLOCK_SIZE * C / BATCH;
 	static constexpr bool NO_BATCH = BATCH == 1;
 
 	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
@@ -403,7 +400,7 @@ renderCUDA(
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
-	float C[CHANNELS] = { 0 };
+	float feature[C] = { 0 };
 	// float D = { 0 };
 
 	// Iterate over batches until all done or range is complete
@@ -422,8 +419,8 @@ renderCUDA(
 			collected_id[block.thread_rank()] = coll_id;
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
-			for (int i = 0; i < CHANNELS; i++)
-				collected_colors[i * THREAD_SIZE + block.thread_rank()] = features[coll_id * CHANNELS + i];
+			for (int i = 0; i < C; i++)
+				collected_colors[i * THREAD_SIZE + block.thread_rank()] = features[coll_id * C + i];
 		}
 		block.sync();
 		
@@ -459,10 +456,10 @@ renderCUDA(
 			}
 
 			// Eq. (3) from 3D Gaussian splatting paper.
-			for (int ch = 0; ch < CHANNELS; ch++)
-				C[ch] += collected_colors[ch * THREAD_SIZE + j] * alpha * T;
-			// for (int ch = 0; ch < CHANNELS; ch++)
-			// 	C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
+			for (int ch = 0; ch < C; ch++)
+				feature[ch] += collected_colors[ch * THREAD_SIZE + j] * alpha * T;
+			// for (int ch = 0; ch < C; ch++)
+			// 	feature[ch] += features[collected_id[j] * C + ch] * alpha * T;
 			// D += depths[collected_id[j]] * alpha * T;
 
 			T = test_T;
@@ -478,8 +475,8 @@ renderCUDA(
 	{
 		final_T[pix_id] = T;
 		n_contrib[pix_id] = last_contributor;
-		for (int ch = 0; ch < CHANNELS; ch++)
-			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
+		for (int ch = 0; ch < C; ch++)
+			out_color[ch * H * W + pix_id] = feature[ch] + T * bg_color[ch];
 		// out_depth[pix_id] = D;
 		// out_trans[pix_id] = T;
 	}
@@ -506,22 +503,22 @@ void FORWARD::render(
 {
 	switch(B){
 		case 1:
-			renderCUDA<NUM_CHANNELS, 1> << <grid, block >> > (
+			renderCUDA<CHANNELS, 1> << <grid, block >> > (
 				ranges, point_list, W, H, B, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_depth, out_trans, mask, point_batch_index
 			);
 			break;
 		case 2:
-			renderCUDA<NUM_CHANNELS, 2> << <grid, block >> > (
+			renderCUDA<CHANNELS, 2> << <grid, block >> > (
 				ranges, point_list, W, H, B, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_depth, out_trans, mask, point_batch_index
 			);
 			break;
 		case 4:
-			renderCUDA<NUM_CHANNELS, 4> << <grid, block >> > (
+			renderCUDA<CHANNELS, 4> << <grid, block >> > (
 				ranges, point_list, W, H, B, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_depth, out_trans, mask, point_batch_index
 			);
 			break;
 		case 8:
-			renderCUDA<NUM_CHANNELS, 8> << <grid, block >> > (
+			renderCUDA<CHANNELS, 8> << <grid, block >> > (
 				ranges, point_list, W, H, B, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_depth, out_trans, mask, point_batch_index
 			);
 			break;
@@ -552,7 +549,7 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 	int* radii,
 	float2* means2D,
 	float* depths,
-	float* cov3Ds,
+	float6* cov3Ds,
 	float* rgb,
 	float4* conic_opacity,
 	const dim3 grid,
@@ -563,7 +560,7 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 	const float low_pass
 )
 {
-	preprocessCUDA<NUM_CHANNELS> << <(BR + 255) / 256, 256 >> > (
+	preprocessCUDA<CHANNELS> << <(BR + 255) / 256, 256 >> > (
 		BR, P, D, M,
 		means3D,
 		scales,
