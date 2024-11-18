@@ -207,6 +207,7 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	const float* tan_fovy,
 	const float* focal_x, 
 	const float* focal_y,
+	const float6* cov3Ds,
 	const bool* is_in_frustum,
 	const dim3 grid,
 	const int* mask,
@@ -241,9 +242,7 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
 	uint32_t vertial_blocks = (H + BLOCK_Y - 1) / BLOCK_Y;
 
-	float6 cov3D_temp;
-	computeCov3D(scales[idx], scale_modifier, rotations[idx], cov3D_temp);
-	float3 cov = computeCov2D(p_orig, focal_x[batch_idx], focal_y[batch_idx], tan_fovx[batch_idx], tan_fovy[batch_idx], cov3D_temp, viewmatrix, low_pass);
+	float3 cov = computeCov2D(p_orig, focal_x[batch_idx], focal_y[batch_idx], tan_fovx[batch_idx], tan_fovy[batch_idx], cov3Ds[idx], viewmatrix, low_pass);
 
 	float det = (cov.x * cov.z - cov.y * cov.y);
 	if (det == 0.0f)
@@ -687,6 +686,7 @@ void FORWARD::measureBufferSize(
 		W, H,
 		tan_fovx, tan_fovy,
 		focal_x, focal_y,
+		cov3Ds,
 		is_in_frustum,
 		grid,
 		mask,
