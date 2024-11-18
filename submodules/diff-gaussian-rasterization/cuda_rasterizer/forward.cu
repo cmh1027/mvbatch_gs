@@ -180,6 +180,20 @@ __global__ void _in_frustum(
 	depths[abs_idx] = p_view.z;
 }
 
+__global__ void precomputeCov3D(
+	int P, 
+	const glm::vec3* scales,
+	const float scale_modifier,
+	const glm::vec4* rotations,
+	float6* cov3Ds
+)
+{
+	auto idx = cg::this_grid().thread_rank();
+	if (idx >= P) return;
+	idx = idx % P;
+	computeCov3D(scales[idx], scale_modifier, rotations[idx], cov3Ds[idx]);
+}
+
 __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	const float* orig_points,
 	const glm::vec3* scales,
@@ -269,7 +283,7 @@ __global__ void preprocessCUDA(int BR, int P, int B, int D, int M,
 	const bool* is_in_frustum,
 	int* radii,
 	float2* points_xy_image,
-	float6* cov3Ds,
+	const float6* cov3Ds,
 	float* rgb,
 	float4* conic_opacity,
 	const dim3 grid,
@@ -309,10 +323,8 @@ __global__ void preprocessCUDA(int BR, int P, int B, int D, int M,
 	uint32_t vertial_blocks = (H + BLOCK_Y - 1) / BLOCK_Y;
 	points_xy_image[idx] = point_image;
 
-	computeCov3D(scales[point_idx], scale_modifier, rotations[point_idx], cov3Ds[idx]);
-
 	// Compute 2D screen-space covariance matrix
-	float3 cov = computeCov2D(p_orig, focal_x[batch_idx], focal_y[batch_idx], tan_fovx[batch_idx], tan_fovy[batch_idx], cov3Ds[idx], viewmatrix, low_pass);
+	float3 cov = computeCov2D(p_orig, focal_x[batch_idx], focal_y[batch_idx], tan_fovx[batch_idx], tan_fovy[batch_idx], cov3Ds[point_idx], viewmatrix, low_pass);
 
 	// Invert covariance (EWA algorithm)
 	float det = (cov.x * cov.z - cov.y * cov.y);
@@ -580,7 +592,7 @@ void FORWARD::preprocess(int BR, int P, int B, int D, int M,
 	const bool* is_in_frustum,
 	int* radii,
 	float2* means2D,
-	float6* cov3Ds,
+	const float6* cov3Ds,
 	float* rgb,
 	float4* conic_opacity,
 	const dim3 grid,
@@ -622,7 +634,8 @@ void FORWARD::preprocess(int BR, int P, int B, int D, int M,
 	ERROR_CHECK
 }
 
-void FORWARD::measureBufferSize(int P, int D, int M, int B,
+void FORWARD::measureBufferSize(
+	int P, int D, int M, int B,
 	const float* orig_points,
 	const glm::vec3* scales,
 	const float scale_modifier,
@@ -641,6 +654,7 @@ void FORWARD::measureBufferSize(int P, int D, int M, int B,
 	bool* batch_rendered_check,
 	bool* is_in_frustum,
 	float* depths,
+	float6* cov3Ds,
 	const float low_pass
 )
 {
@@ -652,6 +666,15 @@ void FORWARD::measureBufferSize(int P, int D, int M, int B,
 		is_in_frustum,
 		depths
 	);
+
+	precomputeCov3D << <(P + 255) / 256, 256 >> >(
+		P,
+		scales,
+		scale_modifier,
+		rotations,
+		cov3Ds
+	);
+
 	measureBufferSizeCUDA << <(B * P + 255) / 256, 256 >> > (
 		P, D, M, B,
 		orig_points,

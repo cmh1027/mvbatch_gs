@@ -36,6 +36,8 @@ namespace CudaRasterizer
 		char* scanning_space;
 		bool* is_in_frustum;
 		float* depths;
+		float6* cov3D;
+		
 		static CacheState fromChunk(char*& chunk, size_t P, size_t B);
 	};
 
@@ -44,9 +46,7 @@ namespace CudaRasterizer
 		size_t scan_size;
 		char* scanning_space;
 		bool* clamped;
-		int* internal_radii;
 		float2* means2D;
-		float6* cov3D;
 		float4* conic_opacity;
 		float* rgb;
 		uint32_t* point_offsets;

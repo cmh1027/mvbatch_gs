@@ -172,7 +172,7 @@ __global__ void computeCov2DCUDA(int BR, int P,
 		return;
 
 	// Reading location of 3D covariance for this Gaussian
-	const float6 cov3D = cov3Ds[idx];
+	const float6 cov3D = cov3Ds[point_idx];
 
 	// Fetch gradients, recompute 2D covariance and relevant 
 	// intermediate forward results needed in the backward.

@@ -248,6 +248,7 @@ CudaRasterizer::CacheState CudaRasterizer::CacheState::fromChunk(char*& chunk, s
     obtain(chunk, cache.scanning_space, cache.scan_size, 128);
 	obtain(chunk, cache.is_in_frustum, P*B, 128);
 	obtain(chunk, cache.depths, P*B, 128);
+	obtain(chunk, cache.cov3D, P, 128);
 	return cache;
 }
 
@@ -256,7 +257,6 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 	GeometryState geom;
 	obtain(chunk, geom.clamped, BR * 3, 128);
 	obtain(chunk, geom.means2D, BR, 128);
-	obtain(chunk, geom.cov3D, BR, 128);
 	obtain(chunk, geom.conic_opacity, BR, 128);
 	obtain(chunk, geom.rgb, BR * 3, 128);
 	obtain(chunk, geom.point_index, BR, 128);
@@ -359,6 +359,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		cacheState.batch_rendered_check,
 		cacheState.is_in_frustum,
 		cacheState.depths,
+		cacheState.cov3D,
 		low_pass
 	), time_check, start, measureTime)
 
@@ -400,7 +401,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		cacheState.is_in_frustum,
 		radii,
 		geomState.means2D,
-		geomState.cov3D,
+		cacheState.cov3D,
 		geomState.rgb,
 		geomState.conic_opacity,
 		tile_grid,
@@ -589,7 +590,7 @@ std::tuple<float, float> CudaRasterizer::Rasterizer::backward(
 		(glm::vec3*)scales,
 		(glm::vec4*)rotations,
 		scale_modifier,
-		geomState.cov3D,
+		cacheState.cov3D,
 		viewmatrix,
 		projmatrix,
 		focal_x, 
