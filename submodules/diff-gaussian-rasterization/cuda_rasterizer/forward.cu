@@ -151,6 +151,35 @@ __device__ void computeCov3D(const glm::vec3 scale, float mod, const glm::vec4 r
 	cov3D.b = Sigma[2][2];
 }
 
+__global__ void _in_frustum(
+	int P, int B,
+	const float* orig_points,
+	const float* viewmatrix,
+	const float* projmatrix,
+	bool* is_in_frustum,
+	float* depths
+)
+{
+	auto idx = cg::this_grid().thread_rank();
+
+	int batch_idx = idx / P;
+	if (batch_idx >= B || idx >= B * P) return;
+	idx = idx % P;
+	int abs_idx = idx * B + batch_idx;
+
+	/* initialization */
+	is_in_frustum[abs_idx] = false;
+
+	/* batch offset */
+	viewmatrix += batch_idx * 16;
+	projmatrix += batch_idx * 16;
+
+	// Perform near culling, quit if outside.
+	float3 p_view;
+	is_in_frustum[abs_idx] = in_frustum(idx, orig_points, viewmatrix, projmatrix, p_view);
+	depths[abs_idx] = p_view.z;
+}
+
 __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	const float* orig_points,
 	const glm::vec3* scales,
@@ -164,6 +193,7 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	const float* tan_fovy,
 	const float* focal_x, 
 	const float* focal_y,
+	const bool* is_in_frustum,
 	const dim3 grid,
 	const int* mask,
 	int* batch_num_rendered,
@@ -176,6 +206,7 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	int batch_idx = idx / P;
 	if (batch_idx >= B || idx >= B * P) return;
 	idx = idx % P;
+	int abs_idx = idx * B + batch_idx;
 
 	/* batch offset */
 	viewmatrix += batch_idx * 16;
@@ -184,7 +215,7 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 
 	// Perform near culling, quit if outside.
 	float3 p_view;
-	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, p_view))
+	if (!is_in_frustum[abs_idx])
 		return;
 
 	// Transform point by projecting
@@ -215,11 +246,11 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 		return;
 
 	atomicAdd(batch_num_rendered + idx, 1);
-	batch_rendered_check[idx * B + batch_idx] = true;
+	batch_rendered_check[abs_idx] = true;
 }
 
 template<int C>
-__global__ void preprocessCUDA(int BR, int P, int D, int M,
+__global__ void preprocessCUDA(int BR, int P, int B, int D, int M,
 	const float* orig_points,
 	const glm::vec3* scales,
 	const float scale_modifier,
@@ -235,9 +266,9 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	const float* tan_fovy,
 	const float* focal_x, 
 	const float* focal_y,
+	const bool* is_in_frustum,
 	int* radii,
 	float2* points_xy_image,
-	float* depths,
 	float6* cov3Ds,
 	float* rgb,
 	float4* conic_opacity,
@@ -255,6 +286,7 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 		return;
 	int point_idx = point_index[idx];
 	int batch_idx = point_batch_index[idx];
+	int abs_idx = point_idx * B + batch_idx;
 
 	/* batch offset */
 	viewmatrix += batch_idx * 16;
@@ -264,7 +296,7 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 
 	// Perform near culling, quit if outside.
 	float3 p_view;
-	if (!in_frustum(point_idx, orig_points, viewmatrix, projmatrix, p_view))
+	if (!is_in_frustum[abs_idx])
 		return;
 
 	// Transform point by projecting
@@ -311,7 +343,6 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 	rgb[idx * C + 2] = result.z;
 
 	// Store some useful helper data for the next steps.
-	depths[idx] = p_view.z;
 	radii[point_idx] = my_radius;
 	
 	// Inverse 2D covariance and opacity neatly pack into one float4
@@ -460,7 +491,7 @@ renderCUDA(
 				feature[ch] += collected_colors[ch * THREAD_SIZE + j] * alpha * T;
 			// for (int ch = 0; ch < C; ch++)
 			// 	feature[ch] += features[collected_id[j] * C + ch] * alpha * T;
-			// D += depths[collected_id[j]] * alpha * T;
+			// D += depths[collected_id[j] * B + batch_idx] * alpha * T; 
 
 			T = test_T;
 
@@ -530,7 +561,7 @@ void FORWARD::render(
 	ERROR_CHECK
 }
 
-void FORWARD::preprocess(int BR, int P, int D, int M,
+void FORWARD::preprocess(int BR, int P, int B, int D, int M,
 	const float* means3D,
 	const glm::vec3* scales,
 	const float scale_modifier,
@@ -546,9 +577,9 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 	const float* focal_y,
 	const float* tan_fovx, 
 	const float* tan_fovy,
+	const bool* is_in_frustum,
 	int* radii,
 	float2* means2D,
-	float* depths,
 	float6* cov3Ds,
 	float* rgb,
 	float4* conic_opacity,
@@ -561,7 +592,7 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 )
 {
 	preprocessCUDA<CHANNELS> << <(BR + 255) / 256, 256 >> > (
-		BR, P, D, M,
+		BR, P, B, D, M,
 		means3D,
 		scales,
 		scale_modifier,
@@ -575,9 +606,9 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 		W, H,
 		tan_fovx, tan_fovy,
 		focal_x, focal_y,
+		is_in_frustum,
 		radii,
 		means2D,
-		depths,
 		cov3Ds,
 		rgb,
 		conic_opacity,
@@ -608,9 +639,19 @@ void FORWARD::measureBufferSize(int P, int D, int M, int B,
 	const int* mask,
 	int* batch_num_rendered,
 	bool* batch_rendered_check,
+	bool* is_in_frustum,
+	float* depths,
 	const float low_pass
 )
 {
+	_in_frustum << <(B * P + 255) / 256, 256 >> > (
+		P, B,
+		orig_points,
+		viewmatrix,
+		projmatrix,
+		is_in_frustum,
+		depths
+	);
 	measureBufferSizeCUDA << <(B * P + 255) / 256, 256 >> > (
 		P, D, M, B,
 		orig_points,
@@ -623,6 +664,7 @@ void FORWARD::measureBufferSize(int P, int D, int M, int B,
 		W, H,
 		tan_fovx, tan_fovy,
 		focal_x, focal_y,
+		is_in_frustum,
 		grid,
 		mask,
 		batch_num_rendered,

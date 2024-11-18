@@ -34,13 +34,14 @@ namespace CudaRasterizer
 		bool* batch_rendered_check;
 		size_t scan_size;
 		char* scanning_space;
+		bool* is_in_frustum;
+		float* depths;
 		static CacheState fromChunk(char*& chunk, size_t P, size_t B);
 	};
 
 	struct GeometryState
 	{
 		size_t scan_size;
-		float* depths;
 		char* scanning_space;
 		bool* clamped;
 		int* internal_radii;

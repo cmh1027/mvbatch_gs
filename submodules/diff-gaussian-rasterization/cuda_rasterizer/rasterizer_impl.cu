@@ -116,6 +116,8 @@ __global__ void duplicateWithKeysCUDA(
 		return;
 	auto point_idx = point_index[idx];
 	auto batch_idx = (uint64_t)point_batch_index[idx];
+	int abs_idx = point_idx * B + batch_idx;
+
 	radii += P * batch_idx;
 	// Generate no key/value pair for invisible Gaussians
 	if (radii[point_idx] > 0)
@@ -138,7 +140,7 @@ __global__ void duplicateWithKeysCUDA(
 				uint64_t key = y * grid.x + x;
 				key <<= 48;
 				key |= (batch_idx << 32) & BATCH_MASK;
-				key |= *((uint32_t*)&depths[idx]) & DEPTH_MASK;
+				key |= *((uint32_t*)&depths[abs_idx]) & DEPTH_MASK;
 
 				gaussian_keys_unsorted[off] = key;
 				gaussian_values_unsorted[off] = idx;
@@ -244,14 +246,14 @@ CudaRasterizer::CacheState CudaRasterizer::CacheState::fromChunk(char*& chunk, s
 	obtain(chunk, cache.batch_rendered_check, P*B, 128);
     cub::DeviceScan::InclusiveSum(nullptr, cache.scan_size, cache.batch_num_rendered, cache.batch_num_rendered_sums, P);
     obtain(chunk, cache.scanning_space, cache.scan_size, 128);
-
+	obtain(chunk, cache.is_in_frustum, P*B, 128);
+	obtain(chunk, cache.depths, P*B, 128);
 	return cache;
 }
 
 CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& chunk, size_t BR)
 {
 	GeometryState geom;
-	obtain(chunk, geom.depths, BR, 128);
 	obtain(chunk, geom.clamped, BR * 3, 128);
 	obtain(chunk, geom.means2D, BR, 128);
 	obtain(chunk, geom.cov3D, BR, 128);
@@ -338,7 +340,6 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 	CacheState cacheState = CacheState::fromChunk(cache_chunkptr, P, B);
 	int BR;
 
-
 	TIME_CHECK(FORWARD::measureBufferSize(
 		P, D, M, B,
 		means3D,
@@ -356,6 +357,8 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		mask,
 		cacheState.batch_num_rendered,
 		cacheState.batch_rendered_check,
+		cacheState.is_in_frustum,
+		cacheState.depths,
 		low_pass
 	), time_check, start, measureTime)
 
@@ -379,7 +382,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 	ImageState imgState = ImageState::fromChunk(img_chunkptr, width * height);
 
 	TIME_CHECK(FORWARD::preprocess(
-		BR, P, D, M,
+		BR, P, B, D, M,
 		means3D,
 		(glm::vec3*)scales,
 		scale_modifier,
@@ -394,9 +397,9 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		focal_y,
 		tan_fovx, 
 		tan_fovy,
+		cacheState.is_in_frustum,
 		radii,
 		geomState.means2D,
-		geomState.depths,
 		geomState.cov3D,
 		geomState.rgb,
 		geomState.conic_opacity,
@@ -426,7 +429,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 	duplicateWithKeys(
 		BR, P, B, width,
 		geomState.means2D,
-		geomState.depths,
+		cacheState.depths,
 		geomState.point_offsets,
 		binningState.point_list_keys_unsorted,
 		binningState.point_list_unsorted,
@@ -469,7 +472,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		width, height, B,
 		geomState.means2D,
 		geomState.rgb,
-		geomState.depths,
+		cacheState.depths,
 		geomState.conic_opacity,
 		imgState.accum_alpha,
 		imgState.n_contrib,
@@ -558,7 +561,7 @@ std::tuple<float, float> CudaRasterizer::Rasterizer::backward(
 		geomState.means2D,
 		geomState.conic_opacity,
 		geomState.rgb,
-		geomState.depths,
+		cacheState.depths,
 		imgState.accum_alpha,
 		imgState.n_contrib,
 		dL_dpix,

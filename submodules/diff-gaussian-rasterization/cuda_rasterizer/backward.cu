@@ -618,7 +618,7 @@ renderCUDA(
 				atomicAdd(&(dL_dcolor[global_id * C + ch]), alpha * T * dL_dchannel);
 			}
 
-			// const float c_d = depths[collected_id[j]];
+			// const float c_d = depths[collected_id[j] * B + batch_idx];
 			// accum_depth_rec = last_alpha * last_depth + (1.f - last_alpha) * accum_depth_rec;
 			// last_depth = c_d;
 			// dL_dalpha += (c_d - accum_depth_rec) * dL_dpixel_depth;

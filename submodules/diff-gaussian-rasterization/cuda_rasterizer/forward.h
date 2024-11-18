@@ -40,10 +40,12 @@ namespace FORWARD
 		const int* mask,
 		int* batch_num_rendered,
 		bool* batch_rendered_check,
+		bool* is_in_frustum,
+		float* depths,
 		const float low_pass
 	);
 
-	void preprocess(int BR, int P, int D, int M,
+	void preprocess(int BR, int P, int B, int D, int M,
 		const float* orig_points,
 		const glm::vec3* scales,
 		const float scale_modifier,
@@ -59,9 +61,9 @@ namespace FORWARD
 		const float* focal_y,
 		const float* tan_fovx, 
 		const float* tan_fovy,
+		const bool* is_in_frustum,
 		int* radii,
 		float2* points_xy_image,
-		float* depths,
 		float6* cov3Ds,
 		float* colors,
 		float4* conic_opacity,
