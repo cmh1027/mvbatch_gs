@@ -153,7 +153,8 @@ def training(dataset, opt, pipe, args):
 		kwargs = {
 			"mask" : pmask,
 			"grad_sep": opt.grad_sep,
-			"time_check": opt.time_check
+			"time_check": opt.time_check,
+			"return_2d_grad": opt.gs_type == "original"
 		} 
 		if opt.time_check:
 			torch.cuda.synchronize()
@@ -174,7 +175,7 @@ def training(dataset, opt, pipe, args):
 		)
 
 		if len(cams) > 1:
-			gt_images = torch.stack([cam.original_image.cuda() for cam in cams]) # (3, H, W)
+			gt_images = torch.stack([cam.original_image.cuda() for cam in cams]) # (B, C, H, W)
 			collage_mask = make_category_mask(pmask, H, W, opt.batch_size).to(torch.int64)
 			collage_mask = collage_mask.unsqueeze(0).repeat(3,1,1)
 			collage_gt = torch.gather(gt_images, 0, collage_mask.unsqueeze(0)).squeeze(0)
@@ -183,10 +184,9 @@ def training(dataset, opt, pipe, args):
 			collage_mask_binary = torch.zeros_like(collage_mask[0:1]).repeat(opt.batch_size, 1, 1).float()
 			collage_mask_binary.scatter_add_(0, collage_mask[0:1], torch.ones_like(collage_mask_binary)) # (B, H, W)
 			if opt.lambda_dssim > 0:
-				image_separated = collage_mask_binary.unsqueeze(1) * image.unsqueeze(0) # (B, C, H, W)
-				gt_separated = collage_mask_binary.unsqueeze(1) * collage_gt.unsqueeze(0)  # (B, C, H, W)
-				ssim_map = ssim(image_separated, gt_separated, mask=collage_mask_binary)
-				loss += opt.lambda_dssim * (1 - ssim_map).sum(dim=0).mean() 
+				image_sep = collage_mask_binary.unsqueeze(1) * image.unsqueeze(0) # (B, C, H, W)
+				ssim_map_approx = ssim(image_sep, gt_images, mask=collage_mask_binary)
+				loss += opt.lambda_dssim * (1 - ssim_map_approx).sum(dim=0).mean() 
 		else:
 			gt_image = cams[0].original_image
 			Ll = pixel_loss(image, gt_image, ltype=opt.loss_type)
@@ -497,5 +497,6 @@ if __name__ == "__main__":
 	if args.forced_exit is None:
 		render_sets(lp.extract(args), render_iter, pp.extract(args), True, False, low_pass=args.low_pass)
 		evaluate([args.model_path]) 
+
 
 

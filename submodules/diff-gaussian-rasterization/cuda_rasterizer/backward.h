@@ -45,7 +45,8 @@ namespace BACKWARD
 		float* dL_ddepths,
 		const int* mask,
 		const int* point_index,
-		const int* point_batch_index
+		const int* point_batch_index,
+		const bool return_2d_grad
 	);
 
 	void preprocess(

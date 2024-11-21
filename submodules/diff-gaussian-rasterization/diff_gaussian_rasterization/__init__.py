@@ -138,6 +138,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                 mask,
                 raster_settings.low_pass,
                 raster_settings.grad_sep,
+                raster_settings.return_2d_grad,
                 raster_settings.time_check,
                 raster_settings.debug)
         
@@ -182,8 +183,8 @@ class GaussianRasterizationSettings(NamedTuple):
     mask : torch.Tensor
     low_pass : float
     log_buffer: dict
-    normalize_grad2D : bool
     grad_sep: bool
+    return_2d_grad: bool
     time_check: bool
 
 class GaussianRasterizer(nn.Module):

@@ -468,7 +468,8 @@ renderCUDA(
 	float* __restrict__ dL_ddepths,
 	const int* __restrict__ mask,
 	const int* __restrict__ point_index,
-	const int* __restrict__ point_batch_index)
+	const int* __restrict__ point_batch_index,
+	const bool return_2d_grad)
 {
 
 	static constexpr int THREAD_SIZE = BLOCK_SIZE / BATCH;
@@ -646,13 +647,16 @@ renderCUDA(
 			const float dG_ddelx = -gdx * con_o.x - gdy * con_o.y;
 			const float dG_ddely = -gdy * con_o.z - gdx * con_o.y;
 
-			// Update gradients w.r.t. 2D mean position of the Gaussian
 			atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx * ddelx_dx);
 			atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely * ddely_dy);
-			// atomicAdd(&dL_dmean2D[global_id].z, fabs(dL_dG * dG_ddelx * ddelx_dx));
-			// atomicAdd(&dL_dmean2D[global_id].w, fabs(dL_dG * dG_ddely * ddely_dy));
-			// atomicAdd(&dL_dmean2D_sq[global_id], sqrt(square(dL_dG * dG_ddelx * ddelx_dx) + square(dL_dG * dG_ddely * ddely_dy)));
-			// atomicAdd(&dL_dmean2D_N[global_id], 1.0);
+			// Update gradients w.r.t. 2D mean position of the Gaussian
+			if(return_2d_grad){
+				// atomicAdd(&dL_dmean2D[global_id].z, fabs(dL_dG * dG_ddelx * ddelx_dx));
+				// atomicAdd(&dL_dmean2D[global_id].w, fabs(dL_dG * dG_ddely * ddely_dy));
+				atomicAdd(&dL_dmean2D_sq[global_id], sqrt(square(dL_dG * dG_ddelx * ddelx_dx) + square(dL_dG * dG_ddely * ddely_dy)));
+				atomicAdd(&dL_dmean2D_N[global_id], 1.0);
+			}
+
 
 
 			// Update gradients w.r.t. 2D covariance (2x2 matrix, symmetric)
@@ -776,35 +780,36 @@ void BACKWARD::render(
 	float* dL_ddepths,
 	const int* mask,
 	const int* point_index,
-	const int* point_batch_index)
+	const int* point_batch_index,
+	const bool return_2d_grad)
 {
 	switch(B){
 		case 1:
 			renderCUDA<CHANNELS, 1> << <grid, block >> >(
 				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, depths, final_Ts, n_contrib, 
 				dL_dpixels, dL_dpixel_depths, dL_dpixel_trans, dL_dmean2D, dL_dmean2D_sq, dL_dmean2D_N, dL_dconic2D, dL_dopacity, dL_dcolor, dL_ddepths,
-				mask, point_index, point_batch_index
+				mask, point_index, point_batch_index, return_2d_grad
 			);
 			break;
 		case 2:
 			renderCUDA<CHANNELS, 2> << <grid, block >> >(
 				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, depths, final_Ts, n_contrib, 
 				dL_dpixels, dL_dpixel_depths, dL_dpixel_trans, dL_dmean2D, dL_dmean2D_sq, dL_dmean2D_N, dL_dconic2D, dL_dopacity, dL_dcolor, dL_ddepths,
-				mask, point_index, point_batch_index
+				mask, point_index, point_batch_index, return_2d_grad
 			);
 			break;
 		case 4:
 			renderCUDA<CHANNELS, 4> << <grid, block >> >(
 				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, depths, final_Ts, n_contrib, 
 				dL_dpixels, dL_dpixel_depths, dL_dpixel_trans, dL_dmean2D, dL_dmean2D_sq, dL_dmean2D_N, dL_dconic2D, dL_dopacity, dL_dcolor, dL_ddepths,
-				mask, point_index, point_batch_index
+				mask, point_index, point_batch_index, return_2d_grad
 			);
 			break;
 		case 8:
 			renderCUDA<CHANNELS, 8> << <grid, block >> >(
 				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, depths, final_Ts, n_contrib, 
 				dL_dpixels, dL_dpixel_depths, dL_dpixel_trans, dL_dmean2D, dL_dmean2D_sq, dL_dmean2D_N, dL_dconic2D, dL_dopacity, dL_dcolor, dL_ddepths,
-				mask, point_index, point_batch_index
+				mask, point_index, point_batch_index, return_2d_grad
 			);
 			break;
 		default:

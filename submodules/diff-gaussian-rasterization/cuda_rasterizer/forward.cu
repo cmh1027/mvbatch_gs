@@ -230,7 +230,6 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	cam_pos = (glm::vec3*)((float3*)cam_pos + batch_idx);
 
 	// Perform near culling, quit if outside.
-	float3 p_view;
 	if (!is_in_frustum[abs_idx])
 		return;
 
@@ -311,7 +310,6 @@ __global__ void preprocessCUDA(int BR, int P, int B, int D, int M,
 	radii += P * batch_idx;
 
 	// Perform near culling, quit if outside.
-	float3 p_view;
 	if (!is_in_frustum[abs_idx])
 		return;
 

@@ -35,6 +35,7 @@ namespace cg = cooperative_groups;
 #define C1 0.0001
 #define C2 0.0009
 
+#define DEBUG
 #ifdef DEBUG
     #define TIMEPRINT(fmt, ...) printf(fmt, ##__VA_ARGS__);
     #define PRINTLINE printf("End %s %d\n", __FILE__, __LINE__);
@@ -94,6 +95,53 @@ __device__ void load_into_shared(float pixels[SY][SSX], const float *inp, const 
   }
 }
 
+__device__ void load_into_shared_masked(float pixels[SY][SSX], const float *inp, const float* mask, const int H, const int W, const int i) {
+  auto block = cg::this_thread_block();
+  const int start_y = block.group_index().y * BY;
+  const int start_x = block.group_index().x * BX;
+
+  const int cnt = SY * SX;
+  const int num_blocks = (cnt + BX * BY - 1) / (BX * BY);
+  for (int b = 0; b < num_blocks; ++b) {
+    int tid = b * (BX * BY) + block.thread_rank();
+    if (tid < cnt) {
+      int local_y = tid / SX;
+      int local_x = tid % SX;
+      int y = start_y + local_y;
+      int x = start_x + local_x;
+      float one;
+      if(get_pix_value(mask, 0, y - 5, x - 5, H, W) == 0){
+        one = 0;
+      }
+      else{
+        one = get_pix_value(inp, i, y - 5, x - 5, H, W);
+      }
+      pixels[local_y][local_x] = one;
+    }
+  }
+}
+
+__device__ void fill_blank(float pixels[SY][SSX], const float mean, const float* mask, const int H, const int W, const int i) {
+  auto block = cg::this_thread_block();
+  const int start_y = block.group_index().y * BY;
+  const int start_x = block.group_index().x * BX;
+
+  const int cnt = SY * SX;
+  const int num_blocks = (cnt + BX * BY - 1) / (BX * BY);
+  for (int b = 0; b < num_blocks; ++b) {
+    int tid = b * (BX * BY) + block.thread_rank();
+    if (tid < cnt) {
+      int local_y = tid / SX;
+      int local_x = tid % SX;
+      int y = start_y + local_y;
+      int x = start_x + local_x;
+      if(get_pix_value(mask, 0, y - 5, x - 5, H, W) == 0){ // fill value with mean only in the masked pixel
+        pixels[local_y][local_x] = mean;
+      }
+    }
+  }
+}
+
 __device__ void multiply_shared_mem(float pix1[SY][SSX], float pix2[SY][SSX]) {
   auto block = cg::this_thread_block();
   const int cnt = SY * SX;
@@ -112,21 +160,6 @@ __device__ void multiply_shared_mem(float pix1[SY][SSX], float pix2[SY][SSX]) {
 
 __device__ inline float do_sq(float val) {
   return val * val;
-}
-
-__device__ void
-flush_conv_scratch(float buf[CY][CCX]) {
-  auto block = cg::this_thread_block();
-  const int cnt = CY * CX;
-  const int num_blocks = (cnt + BX * BY - 1) / (BX * BY);
-  for (int b = 0; b < num_blocks; ++b) {
-    const int tid = b * (BX * BY) + block.thread_rank();
-    if (tid < cnt) {
-      const int local_y = tid / CX;
-      const int local_x = tid % CX;
-      buf[local_y][local_x] = 0.0f;
-    }
-  }
 }
 
 __device__ void do_separable_conv_x(float pixels[SY][SSX], float opt[CY][CCX], int H, int W, bool sq = false) {
@@ -195,6 +228,139 @@ __device__ void do_separable_conv_x(float pixels[SY][SSX], float opt[CY][CCX], i
   }
 }
 
+
+__device__ void do_separable_conv_x_invmasked(float pixels[SY][SSX], float mask[SY][SSX], float opt[CY][CCX], int H, int W, bool sq = false) {
+  auto block = cg::this_thread_block();
+
+  int local_y = block.thread_index().y;
+  int local_x = block.thread_index().x + 5;
+  float val = 0.0f;
+  
+  if (sq) {
+    val += G_00 * do_sq(pixels[local_y][local_x - 5]) * (1-mask[local_y][local_x - 5]);
+    val += G_01 * do_sq(pixels[local_y][local_x - 4]) * (1-mask[local_y][local_x - 4]);
+    val += G_02 * do_sq(pixels[local_y][local_x - 3]) * (1-mask[local_y][local_x - 3]);
+    val += G_03 * do_sq(pixels[local_y][local_x - 2]) * (1-mask[local_y][local_x - 2]);
+    val += G_04 * do_sq(pixels[local_y][local_x - 1]) * (1-mask[local_y][local_x - 1]);
+    val += G_05 * do_sq(pixels[local_y][local_x    ]) * (1-mask[local_y][local_x    ]);
+    val += G_06 * do_sq(pixels[local_y][local_x + 1]) * (1-mask[local_y][local_x + 1]);
+    val += G_07 * do_sq(pixels[local_y][local_x + 2]) * (1-mask[local_y][local_x + 2]);
+    val += G_08 * do_sq(pixels[local_y][local_x + 3]) * (1-mask[local_y][local_x + 3]);
+    val += G_09 * do_sq(pixels[local_y][local_x + 4]) * (1-mask[local_y][local_x + 4]);
+    val += G_10 * do_sq(pixels[local_y][local_x + 5]) * (1-mask[local_y][local_x + 5]);
+  } else {
+    val += G_00 * pixels[local_y][local_x - 5] * (1-mask[local_y][local_x - 5]);
+    val += G_01 * pixels[local_y][local_x - 4] * (1-mask[local_y][local_x - 4]);
+    val += G_02 * pixels[local_y][local_x - 3] * (1-mask[local_y][local_x - 3]);
+    val += G_03 * pixels[local_y][local_x - 2] * (1-mask[local_y][local_x - 2]);
+    val += G_04 * pixels[local_y][local_x - 1] * (1-mask[local_y][local_x - 1]);
+    val += G_05 * pixels[local_y][local_x    ] * (1-mask[local_y][local_x    ]);
+    val += G_06 * pixels[local_y][local_x + 1] * (1-mask[local_y][local_x + 1]);
+    val += G_07 * pixels[local_y][local_x + 2] * (1-mask[local_y][local_x + 2]);
+    val += G_08 * pixels[local_y][local_x + 3] * (1-mask[local_y][local_x + 3]);
+    val += G_09 * pixels[local_y][local_x + 4] * (1-mask[local_y][local_x + 4]);
+    val += G_10 * pixels[local_y][local_x + 5] * (1-mask[local_y][local_x + 5]);
+  }
+  opt[local_y][local_x] = val;
+
+  val = 0.0f;
+  local_y = block.thread_index().y + BY;
+  if (local_y < SY) {
+    if (sq) {
+      val += G_00 * do_sq(pixels[local_y][local_x - 5]) * (1-mask[local_y][local_x - 5]);
+      val += G_01 * do_sq(pixels[local_y][local_x - 4]) * (1-mask[local_y][local_x - 4]);
+      val += G_02 * do_sq(pixels[local_y][local_x - 3]) * (1-mask[local_y][local_x - 3]);
+      val += G_03 * do_sq(pixels[local_y][local_x - 2]) * (1-mask[local_y][local_x - 2]);
+      val += G_04 * do_sq(pixels[local_y][local_x - 1]) * (1-mask[local_y][local_x - 1]);
+      val += G_05 * do_sq(pixels[local_y][local_x    ]) * (1-mask[local_y][local_x    ]);
+      val += G_06 * do_sq(pixels[local_y][local_x + 1]) * (1-mask[local_y][local_x + 1]);
+      val += G_07 * do_sq(pixels[local_y][local_x + 2]) * (1-mask[local_y][local_x + 2]);
+      val += G_08 * do_sq(pixels[local_y][local_x + 3]) * (1-mask[local_y][local_x + 3]);
+      val += G_09 * do_sq(pixels[local_y][local_x + 4]) * (1-mask[local_y][local_x + 4]);
+      val += G_10 * do_sq(pixels[local_y][local_x + 5]) * (1-mask[local_y][local_x + 5]);
+    } else {
+      val += G_00 * pixels[local_y][local_x - 5] * (1-mask[local_y][local_x - 5]);
+      val += G_01 * pixels[local_y][local_x - 4] * (1-mask[local_y][local_x - 4]);
+      val += G_02 * pixels[local_y][local_x - 3] * (1-mask[local_y][local_x - 3]);
+      val += G_03 * pixels[local_y][local_x - 2] * (1-mask[local_y][local_x - 2]);
+      val += G_04 * pixels[local_y][local_x - 1] * (1-mask[local_y][local_x - 1]);
+      val += G_05 * pixels[local_y][local_x    ] * (1-mask[local_y][local_x    ]);
+      val += G_06 * pixels[local_y][local_x + 1] * (1-mask[local_y][local_x + 1]);
+      val += G_07 * pixels[local_y][local_x + 2] * (1-mask[local_y][local_x + 2]);
+      val += G_08 * pixels[local_y][local_x + 3] * (1-mask[local_y][local_x + 3]);
+      val += G_09 * pixels[local_y][local_x + 4] * (1-mask[local_y][local_x + 4]);
+      val += G_10 * pixels[local_y][local_x + 5] * (1-mask[local_y][local_x + 5]);
+    }
+    opt[local_y][local_x] = val;
+  }
+}
+
+__device__ void do_separable_conv_x_masked(float pixels[SY][SSX], float mask[SY][SSX], float opt[CY][CCX], int H, int W, bool sq = false) {
+  auto block = cg::this_thread_block();
+
+  int local_y = block.thread_index().y;
+  int local_x = block.thread_index().x + 5;
+  float val = 0.0f;
+  
+  if (sq) {
+    val += G_00 * do_sq(pixels[local_y][local_x - 5]) * mask[local_y][local_x - 5];
+    val += G_01 * do_sq(pixels[local_y][local_x - 4]) * mask[local_y][local_x - 4];
+    val += G_02 * do_sq(pixels[local_y][local_x - 3]) * mask[local_y][local_x - 3];
+    val += G_03 * do_sq(pixels[local_y][local_x - 2]) * mask[local_y][local_x - 2];
+    val += G_04 * do_sq(pixels[local_y][local_x - 1]) * mask[local_y][local_x - 1];
+    val += G_05 * do_sq(pixels[local_y][local_x    ]) * mask[local_y][local_x    ];
+    val += G_06 * do_sq(pixels[local_y][local_x + 1]) * mask[local_y][local_x + 1];
+    val += G_07 * do_sq(pixels[local_y][local_x + 2]) * mask[local_y][local_x + 2];
+    val += G_08 * do_sq(pixels[local_y][local_x + 3]) * mask[local_y][local_x + 3];
+    val += G_09 * do_sq(pixels[local_y][local_x + 4]) * mask[local_y][local_x + 4];
+    val += G_10 * do_sq(pixels[local_y][local_x + 5]) * mask[local_y][local_x + 5];
+  } else {
+    val += G_00 * pixels[local_y][local_x - 5] * mask[local_y][local_x - 5];
+    val += G_01 * pixels[local_y][local_x - 4] * mask[local_y][local_x - 4];
+    val += G_02 * pixels[local_y][local_x - 3] * mask[local_y][local_x - 3];
+    val += G_03 * pixels[local_y][local_x - 2] * mask[local_y][local_x - 2];
+    val += G_04 * pixels[local_y][local_x - 1] * mask[local_y][local_x - 1];
+    val += G_05 * pixels[local_y][local_x    ] * mask[local_y][local_x    ];
+    val += G_06 * pixels[local_y][local_x + 1] * mask[local_y][local_x + 1];
+    val += G_07 * pixels[local_y][local_x + 2] * mask[local_y][local_x + 2];
+    val += G_08 * pixels[local_y][local_x + 3] * mask[local_y][local_x + 3];
+    val += G_09 * pixels[local_y][local_x + 4] * mask[local_y][local_x + 4];
+    val += G_10 * pixels[local_y][local_x + 5] * mask[local_y][local_x + 5];
+  }
+  opt[local_y][local_x] = val;
+
+  val = 0.0f;
+  local_y = block.thread_index().y + BY;
+  if (local_y < SY) {
+    if (sq) {
+      val += G_00 * do_sq(pixels[local_y][local_x - 5]) * mask[local_y][local_x - 5];
+      val += G_01 * do_sq(pixels[local_y][local_x - 4]) * mask[local_y][local_x - 4];
+      val += G_02 * do_sq(pixels[local_y][local_x - 3]) * mask[local_y][local_x - 3];
+      val += G_03 * do_sq(pixels[local_y][local_x - 2]) * mask[local_y][local_x - 2];
+      val += G_04 * do_sq(pixels[local_y][local_x - 1]) * mask[local_y][local_x - 1];
+      val += G_05 * do_sq(pixels[local_y][local_x    ]) * mask[local_y][local_x    ];
+      val += G_06 * do_sq(pixels[local_y][local_x + 1]) * mask[local_y][local_x + 1];
+      val += G_07 * do_sq(pixels[local_y][local_x + 2]) * mask[local_y][local_x + 2];
+      val += G_08 * do_sq(pixels[local_y][local_x + 3]) * mask[local_y][local_x + 3];
+      val += G_09 * do_sq(pixels[local_y][local_x + 4]) * mask[local_y][local_x + 4];
+      val += G_10 * do_sq(pixels[local_y][local_x + 5]) * mask[local_y][local_x + 5];
+    } else {
+      val += G_00 * pixels[local_y][local_x - 5] * mask[local_y][local_x - 5];
+      val += G_01 * pixels[local_y][local_x - 4] * mask[local_y][local_x - 4];
+      val += G_02 * pixels[local_y][local_x - 3] * mask[local_y][local_x - 3];
+      val += G_03 * pixels[local_y][local_x - 2] * mask[local_y][local_x - 2];
+      val += G_04 * pixels[local_y][local_x - 1] * mask[local_y][local_x - 1];
+      val += G_05 * pixels[local_y][local_x    ] * mask[local_y][local_x    ];
+      val += G_06 * pixels[local_y][local_x + 1] * mask[local_y][local_x + 1];
+      val += G_07 * pixels[local_y][local_x + 2] * mask[local_y][local_x + 2];
+      val += G_08 * pixels[local_y][local_x + 3] * mask[local_y][local_x + 3];
+      val += G_09 * pixels[local_y][local_x + 4] * mask[local_y][local_x + 4];
+      val += G_10 * pixels[local_y][local_x + 5] * mask[local_y][local_x + 5];
+    }
+    opt[local_y][local_x] = val;
+  }
+}
+
 __device__ float do_separable_conv_y(float pixels[CY][CCX], int H, int W, bool sq = false) {
   auto block = cg::this_thread_block();
   int local_y = block.thread_index().y + 5;
@@ -220,10 +386,9 @@ __global__ void fusedssimCUDA(
   int H,
   int W,
   int CH,
-  const float* img1,
-  const float* img2,
+  const float* pred,
+  const float* gt,
   const float* mask,
-  float* denom_buffer,
   float* ssim_map,
   float* dm_dmu1,
   float* dm_dsigma1_sq,
@@ -232,17 +397,14 @@ __global__ void fusedssimCUDA(
 {
   auto block = cg::this_thread_block();
   const int batch_idx = block.group_index().z;
-  img1 += batch_idx * CH * H * W;
-  img2 += batch_idx * CH * H * W;
+  pred += batch_idx * CH * H * W;
+  gt += batch_idx * CH * H * W;
   mask += batch_idx * H * W;
-  denom_buffer += batch_idx * H * W;
   ssim_map += batch_idx * CH * H * W;
   dm_dmu1 += batch_idx * CH * H * W;
   dm_dsigma1_sq += batch_idx * CH * H * W;
   dm_dsigma12 += batch_idx * CH * H * W;
 
-
-  
   const int pix_y = block.group_index().y * BY + block.thread_index().y;
   const int pix_x = block.group_index().x * BX + block.thread_index().x;
   const int pix_id = pix_y * W + pix_x;
@@ -252,43 +414,43 @@ __global__ void fusedssimCUDA(
   __shared__ float buf1[SY][SSX];
   __shared__ float buf2[SY][SSX];
   __shared__ float buf3[CY][CCX];
-
-  load_into_shared(buf1, mask, H, W, 0);
+  __shared__ float buf_mask[SY][SSX];
+  
+  load_into_shared(buf_mask, mask, H, W, 0);
   block.sync();
-  do_separable_conv_x(buf1, buf3, H, W);
+  do_separable_conv_x(buf_mask, buf3, H, W);
   block.sync();
   float denom = do_separable_conv_y(buf3, H, W);
   float denom_inv = (denom > 0) ? (1/denom) : 1;
-  set_pix_value(denom_buffer, denom_inv, 0, pix_y, pix_x, H, W);
   block.sync();
 
   for (int i = 0; i < CH; ++i) {
     // load into shared
-    load_into_shared(buf1, img1, H, W, i);
+    load_into_shared(buf1, pred, H, W, i);
+    block.sync();
+    load_into_shared(buf2, gt, H, W, i);
     block.sync();
 
     // calculate mu1
-    do_separable_conv_x(buf1, buf3, H, W);
+    do_separable_conv_x_masked(buf1, buf_mask, buf3, H, W);
     block.sync();
     float mu1 = do_separable_conv_y(buf3, H, W) * denom_inv;
     block.sync();
 
-    // calculate sigma1_sq
-    do_separable_conv_x(buf1, buf3, H, W, true);
-    block.sync();
-    float sigma1_sq = do_separable_conv_y(buf3, H, W) * denom_inv - mu1 * mu1;
-    block.sync();
-
     // calculate mu2
-    load_into_shared(buf2, img2, H, W, i);
-    block.sync();
-    do_separable_conv_x(buf2, buf3, H, W);
+    do_separable_conv_x_masked(buf2, buf_mask, buf3, H, W);
     block.sync();
     float mu2 = do_separable_conv_y(buf3, H, W) * denom_inv;
     block.sync();
 
+    // calculate sigma1_sq
+    do_separable_conv_x_masked(buf1, buf_mask, buf3, H, W, true);
+    block.sync();
+    float sigma1_sq = do_separable_conv_y(buf3, H, W) * denom_inv - mu1 * mu1;
+    block.sync();
+
     // calculate sigma2_sq
-    do_separable_conv_x(buf2, buf3, H, W, true);
+    do_separable_conv_x_masked(buf2, buf_mask, buf3, H, W, true);
     block.sync();
     float sigma2_sq = do_separable_conv_y(buf3, H, W) * denom_inv - mu2 * mu2;
     block.sync();
@@ -296,7 +458,7 @@ __global__ void fusedssimCUDA(
     // calculate sigma12
     multiply_shared_mem(buf1, buf2);
     block.sync();
-    do_separable_conv_x(buf1, buf3, H, W);
+    do_separable_conv_x_masked(buf1, buf_mask, buf3, H, W);
     block.sync();
     float sigma12 = do_separable_conv_y(buf3, H, W) * denom_inv - mu1 * mu2;
     block.sync();
@@ -330,28 +492,25 @@ __global__ void fusedssim_backwardCUDA(
   int H,
   int W,
   int CH,
-  const float* img1,
-  const float* img2,
+  const float* pred,
+  const float* gt,
   const float* mask,
-  const float* denom_buffer,
   const float* dL_dmap,
-  float *dL_dimg1,
+  float *dL_dpred,
   float* dm_dmu1,
   float* dm_dsigma1_sq,
-  float* dm_dsigma12,
-  bool normalize_backward
+  float* dm_dsigma12
 )
 {
   auto block = cg::this_thread_block();
   const int batch_idx = block.group_index().z;
-  img1 += batch_idx * CH * H * W;
-  img2 += batch_idx * CH * H * W;
+  pred += batch_idx * CH * H * W;
+  gt += batch_idx * CH * H * W;
   mask += batch_idx * H * W;
-  denom_buffer += batch_idx * H * W;
   dm_dmu1 += batch_idx * CH * H * W;
   dm_dsigma1_sq += batch_idx * CH * H * W;
   dm_dsigma12 += batch_idx * CH * H * W;
-  dL_dimg1 += batch_idx * CH * H * W;
+  dL_dpred += batch_idx * CH * H * W;
   
   const int pix_y = block.group_index().y * BY + block.thread_index().y;
   const int pix_x = block.group_index().x * BX + block.thread_index().x;
@@ -366,14 +525,9 @@ __global__ void fusedssim_backwardCUDA(
 
   for (int i = 0; i < CH; ++i) {
     float dL_dpix = 0.0f;
-    float pix1 = get_pix_value(img1, i, pix_y, pix_x, H, W);
-    float pix2 = get_pix_value(img2, i, pix_y, pix_x, H, W);
+    float pix1 = get_pix_value(pred, i, pix_y, pix_x, H, W);
+    float pix2 = get_pix_value(gt, i, pix_y, pix_x, H, W);
     load_into_shared(buf1, dL_dmap, H, W, i);
-    if(normalize_backward){
-      load_into_shared(buf2, denom_buffer, H, W, 0);
-      block.sync();
-      multiply_shared_mem(buf1, buf2);
-    }
     block.sync();
 
     // gradient from mu1
@@ -408,70 +562,66 @@ __global__ void fusedssim_backwardCUDA(
 
     if (pix_x < W && pix_y < H && !masked) {
       const int global_idx = i * num_pix + pix_id;
-      dL_dimg1[global_idx] = dL_dpix;
+      dL_dpred[global_idx] = dL_dpix;
     }
   }
 }
 
-std::tuple<torch::Tensor,torch::Tensor,torch::Tensor,torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor,torch::Tensor,torch::Tensor,torch::Tensor>
 fusedssim(
-  torch::Tensor &img1, // (B, 3, H, W)
-  torch::Tensor &img2,
+  torch::Tensor &pred, // (B, 3, H, W)
+  torch::Tensor &gt,
   torch::Tensor &mask
 )
 {
-  const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
-  int B = img1.size(0);
-  int CH = img1.size(1);
-  int H = img1.size(2);
-  int W = img1.size(3);
+  const at::cuda::OptionalCUDAGuard device_guard(device_of(pred));
+  int B = pred.size(0);
+  int CH = pred.size(1);
+  int H = pred.size(2);
+  int W = pred.size(3);
 
   dim3 grid((W + BX - 1) / BX, (H + BY - 1) / BY, B);
   dim3 block(BX, BY, 1);
   
-  auto float_opts = img1.options().dtype(torch::kFloat32);
+  auto float_opts = pred.options().dtype(torch::kFloat32);
 
-  torch::Tensor target = torch::zeros_like(img1).contiguous(); // (B, 3, H, W)
-  torch::Tensor denom_buffer = torch::zeros_like(mask).contiguous();
-  torch::Tensor dm_dmu1 = torch::zeros_like(img1).contiguous();
-  torch::Tensor dm_dsigma1_sq = torch::zeros_like(img1).contiguous();
-  torch::Tensor dm_dsigma12 = torch::zeros_like(img1).contiguous();
+  torch::Tensor target = torch::zeros_like(pred).contiguous(); // (B, 3, H, W)
+  torch::Tensor dm_dmu1 = torch::zeros_like(pred).contiguous();
+  torch::Tensor dm_dsigma1_sq = torch::zeros_like(pred).contiguous();
+  torch::Tensor dm_dsigma12 = torch::zeros_like(pred).contiguous();
   fusedssimCUDA<<<grid,block>>>(
     H,
     W,
     CH,
-    img1.contiguous().data<float>(),
-    img2.contiguous().data<float>(),
+    pred.contiguous().data<float>(),
+    gt.contiguous().data<float>(),
     mask.contiguous().data<float>(),
-    denom_buffer.contiguous().data<float>(),
     target.contiguous().data<float>(),
     dm_dmu1.contiguous().data<float>(),
     dm_dsigma1_sq.contiguous().data<float>(),
     dm_dsigma12.contiguous().data<float>()
   );
   ERROR_CHECK
-  return std::make_tuple(target, dm_dmu1, dm_dsigma1_sq, dm_dsigma12, denom_buffer);
+  return std::make_tuple(target, dm_dmu1, dm_dsigma1_sq, dm_dsigma12);
 }
 
 torch::Tensor fusedssim_backward(
-  torch::Tensor &img1,
-  torch::Tensor &img2,
+  torch::Tensor &pred,
+  torch::Tensor &gt,
   torch::Tensor &mask,
   torch::Tensor &dL_dmap,
   torch::Tensor &dm_dmu1,
   torch::Tensor &dm_dsigma1_sq,
-  torch::Tensor &dm_dsigma12,
-  torch::Tensor &denom_buffer,
-  bool normalize_backward
+  torch::Tensor &dm_dsigma12
 )
 {
-  const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
-  int B = img1.size(0);
-  int CH = img1.size(1);
-  int H = img1.size(2);
-  int W = img1.size(3);
+  const at::cuda::OptionalCUDAGuard device_guard(device_of(pred));
+  int B = pred.size(0);
+  int CH = pred.size(1);
+  int H = pred.size(2);
+  int W = pred.size(3);
 
-  torch::Tensor dL_dimg1 = torch::zeros_like(img1).contiguous();
+  torch::Tensor dL_dpred = torch::zeros_like(pred).contiguous();
 
   dim3 grid((W + BX - 1) / BX, (H + BY - 1) / BY, B);
   dim3 block(BX, BY, 1);
@@ -479,17 +629,15 @@ torch::Tensor fusedssim_backward(
     H,
     W,
     CH,
-    img1.contiguous().data<float>(),
-    img2.contiguous().data<float>(),
+    pred.contiguous().data<float>(),
+    gt.contiguous().data<float>(),
     mask.contiguous().data<float>(),
-    denom_buffer.contiguous().data<float>(),
     dL_dmap.contiguous().data<float>(),
-    dL_dimg1.contiguous().data<float>(),
+    dL_dpred.contiguous().data<float>(),
     dm_dmu1.contiguous().data<float>(),
     dm_dsigma1_sq.contiguous().data<float>(),
-    dm_dsigma12.contiguous().data<float>(),
-    normalize_backward
+    dm_dsigma12.contiguous().data<float>()
   );
   ERROR_CHECK
-  return dL_dimg1;
+  return dL_dpred;
 }

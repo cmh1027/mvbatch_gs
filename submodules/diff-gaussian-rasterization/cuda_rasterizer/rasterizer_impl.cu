@@ -533,6 +533,7 @@ std::tuple<float, float> CudaRasterizer::Rasterizer::backward(
 	const int* mask,
 	int* point_idx,
 	const float low_pass,
+	const bool return_2d_grad,
 	const bool time_check,
 	bool debug)
 {
@@ -580,7 +581,8 @@ std::tuple<float, float> CudaRasterizer::Rasterizer::backward(
 		dL_ddepth,
 		mask,
 		geomState.point_index,
-		geomState.point_batch_index
+		geomState.point_batch_index,
+		return_2d_grad
 	), time_check, start, renderTime)
 	ERROR_CHECK
 

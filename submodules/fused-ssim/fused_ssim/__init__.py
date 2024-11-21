@@ -7,28 +7,27 @@ from fused_ssim_cuda import fusedssim, fusedssim_backward
 
 class FusedSSIMMap(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, img1, img2, mask, normalize_backward):
-        ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12, denom_buffer = fusedssim(img1, img2, mask)
-        ctx.save_for_backward(img1.detach(), img2, mask, dm_dmu1, dm_dsigma1_sq, dm_dsigma12, denom_buffer)
-        ctx.normalize_backward = normalize_backward
+    def forward(ctx, pred, gt, mask):
+        ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = fusedssim(pred, gt, mask)
+        ctx.save_for_backward(pred.detach(), gt, mask, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
 
         return ssim_map
 
     @staticmethod
     def backward(ctx, opt_grad):
-        img1, img2, mask, dm_dmu1, dm_dsigma1_sq, dm_dsigma12, denom_buffer = ctx.saved_tensors
+        pred, gt, mask, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = ctx.saved_tensors
         dL_dmap = opt_grad
-        grad = fusedssim_backward(img1, img2, mask, dL_dmap, dm_dmu1, dm_dsigma1_sq, dm_dsigma12, denom_buffer, ctx.normalize_backward)
+        grad = fusedssim_backward(pred, gt, mask, dL_dmap, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
         return grad, None, None, None
 
-def fused_ssim(img1, img2, mask, normalize_backward):
-    if len(img1.shape) == 3:
-        img1 = img1[None]
-        img2 = img2[None]
-    _, C, H, W = img1.shape
+def fused_ssim(pred, gt, mask):
+    if len(pred.shape) == 3:
+        pred = pred[None]
+        gt = gt[None]
+    B, C, H, W = pred.shape
     if mask is None:
-        mask = torch.ones(1, H, W, device=torch.device('cuda'))
+        mask = torch.ones(B, H, W, device=torch.device('cuda'))
     else:
         if len(mask.shape) == 2:
             mask = mask[None]
-    return FusedSSIMMap.apply(img1, img2, mask, normalize_backward)
+    return FusedSSIMMap.apply(pred, gt, mask)

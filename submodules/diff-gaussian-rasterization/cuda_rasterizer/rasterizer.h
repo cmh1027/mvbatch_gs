@@ -97,6 +97,7 @@ namespace CudaRasterizer
 			const int* mask,
 			int* point_idx,
 			const float low_pass,
+			const bool return_2d_grad,
 			const bool time_check,
 			bool debug);
 	};

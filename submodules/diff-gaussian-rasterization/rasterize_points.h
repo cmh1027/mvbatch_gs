@@ -64,6 +64,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	torch::Tensor& mask,
 	const float low_pass,
 	const bool grad_sep,
+	const bool return_2d_grad,
 	const bool time_check,
 	const bool debug);
 		
