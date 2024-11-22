@@ -144,6 +144,7 @@ class OptimizationParams(ParamGroup):
 
         self.split_original = False
         self.time_check = False
+        self.ssim_schedule = False
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

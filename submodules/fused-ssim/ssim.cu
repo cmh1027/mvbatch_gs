@@ -35,7 +35,7 @@ namespace cg = cooperative_groups;
 #define C1 0.0001
 #define C2 0.0009
 
-#define DEBUG
+// #define DEBUG
 #ifdef DEBUG
     #define TIMEPRINT(fmt, ...) printf(fmt, ##__VA_ARGS__);
     #define PRINTLINE printf("End %s %d\n", __FILE__, __LINE__);

@@ -184,9 +184,19 @@ def training(dataset, opt, pipe, args):
 			collage_mask_binary = torch.zeros_like(collage_mask[0:1]).repeat(opt.batch_size, 1, 1).float()
 			collage_mask_binary.scatter_add_(0, collage_mask[0:1], torch.ones_like(collage_mask_binary)) # (B, H, W)
 			if opt.lambda_dssim > 0:
+				if opt.ssim_schedule:
+					_s, _e = 6000, 3000
+					coef_merge = min(1, max(0, (iteration - _s) / (opt.iterations - _s - _e))) * 0.2
+					coef_sep = 1 - coef_merge
+				else:
+					coef_sep = 1.0
 				image_sep = collage_mask_binary.unsqueeze(1) * image.unsqueeze(0) # (B, C, H, W)
 				ssim_map_approx = ssim(image_sep, gt_images, mask=collage_mask_binary)
-				loss += opt.lambda_dssim * (1 - ssim_map_approx).sum(dim=0).mean() 
+				loss += opt.lambda_dssim * (1 - ssim_map_approx).sum(dim=0).mean() * coef_sep
+				if opt.ssim_schedule and coef_merge > 0:
+					image_merge = image_sep + (1 - collage_mask_binary.unsqueeze(1)) * gt_images
+					ssim_map_merge = ssim(image_merge, gt_images)
+					loss += opt.lambda_dssim * (1 - ssim_map_merge).sum(dim=0).mean() * coef_merge
 		else:
 			gt_image = cams[0].original_image
 			Ll = pixel_loss(image, gt_image, ltype=opt.loss_type)
@@ -236,6 +246,8 @@ def training(dataset, opt, pipe, args):
 					"num_pts": len(gaussians._xyz),
 					"batch": opt.batch_size
 				}
+				if "coef_merge" in locals():
+					postfix["c_m"] = coef_merge
 				progress_bar.set_postfix(postfix)
 				progress_bar.update(10)
 			if iteration == opt.iterations:
