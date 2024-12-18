@@ -18,13 +18,13 @@ window = None
 
 loss_dict = {
     "l1" : lambda x1, x2: torch.abs(x1 - x2),
-    "l2" : lambda x1, x2: (x1 - x2) ** 2
+    "l2" : lambda x1, x2: 0.5 * (x1 - x2) ** 2
 }
 
-
-
-def pixel_loss(pred, gt, ltype="l1"):
-    loss = loss_dict[ltype](pred, gt).view(3, -1)
+def pixel_loss(pred, gt, ltype="l1", weight=None):
+    loss = loss_dict[ltype](pred, gt)
+    if weight is not None:
+        loss = loss * weight
     return loss.mean()
 
 def gaussian(window_size, sigma):
@@ -37,8 +37,8 @@ def create_window(window_size, channel):
     window = Variable(_2D_window.expand(channel, 1, window_size, window_size).contiguous())
     return window
 
-def ssim(img1, img2, mask=None):
-    return fused_ssim(img1, img2, mask)
+def ssim(img1, img2, mask=None, normalize=True):
+    return fused_ssim(img1, img2, mask, normalize=normalize)
 
 # def ssim(img1, img2, window_size=11, mask=None):
 #     channel = img1.size(-3)

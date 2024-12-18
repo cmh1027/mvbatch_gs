@@ -174,34 +174,52 @@ class GaussianModel:
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
 
-    def training_setup(self, training_args):
-        self.percent_dense = training_args.percent_dense
+    def training_setup(self, opt):
+        self.percent_dense = opt.percent_dense
         self.vs_clone_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.vs_split_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
 
         l = [
-            {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
-            {'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
-            {'params': [self._features_rest], 'lr': training_args.feature_lr / 20.0, "name": "f_rest"},
-            {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
-            {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
-            {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
+            {'params': [self._xyz], 'lr': opt.position_lr * self.spatial_lr_scale, "name": "xyz"},
+            {'params': [self._features_dc], 'lr': opt.feature_lr, "name": "f_dc"},
+            {'params': [self._features_rest], 'lr': opt.feature_lr / 20.0, "name": "f_rest"},
+            {'params': [self._opacity], 'lr': opt.opacity_lr, "name": "opacity"},
+            {'params': [self._scaling], 'lr': opt.scaling_lr, "name": "scaling"},
+            {'params': [self._rotation], 'lr': opt.rotation_lr, "name": "rotation"},
         ]
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
-        self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,
-                                                    lr_final=training_args.position_lr_final*self.spatial_lr_scale,
-                                                    lr_delay_mult=training_args.position_lr_delay_mult,
-                                                    max_steps=training_args.position_lr_max_steps)
+        self.schedulers = {}
+        self.schedulers["xyz"] = get_expon_lr_func(lr_init=opt.position_lr*self.spatial_lr_scale,
+                                                   lr_final=opt.position_lr*opt.position_lr_coef*self.spatial_lr_scale,
+                                                   max_steps=opt.iterations)
+        self.schedulers["f_dc"] = get_expon_lr_func(lr_init=opt.feature_lr,
+                                                    lr_final=opt.feature_lr*opt.feature_lr_coef,
+                                                    max_steps=opt.iterations)
+        self.schedulers["f_rest"] = get_expon_lr_func(lr_init=opt.feature_lr/20.0,
+                                                      lr_final=opt.feature_lr*opt.feature_lr_coef/20.0,
+                                                      max_steps=opt.iterations)
+        self.schedulers["opacity"] = get_expon_lr_func(lr_init=opt.opacity_lr,
+                                                       lr_final=opt.opacity_lr*opt.opacity_lr_coef,
+                                                       max_steps=opt.iterations)
+        self.schedulers["scaling"] = get_expon_lr_func(lr_init=opt.scaling_lr,
+                                                       lr_final=opt.scaling_lr*opt.scaling_lr_coef,
+                                                       max_steps=opt.iterations)
+        self.schedulers["rotation"] = get_expon_lr_func(lr_init=opt.rotation_lr,
+                                                        lr_final=opt.rotation_lr*opt.rotation_lr_coef, 
+                                                        max_steps=opt.iterations)
 
-    def update_learning_rate(self, iteration):
+
+    def update_learning_rate(self, iteration, schedule_all):
         ''' Learning rate scheduling per step '''
+        lrs = {}
         for param_group in self.optimizer.param_groups:
-            if param_group["name"] == "xyz":
-                lr = self.xyz_scheduler_args(iteration)
-                param_group['lr'] = lr
-                return lr
+            param = param_group["name"]
+            if param != "xyz" and not schedule_all: continue
+            param_group['lr'] = self.schedulers[param](iteration)
+            lrs[param] = param_group['lr']
+        return lrs
 
     def construct_list_of_attributes(self):
         l = ['x', 'y', 'z', 'nx', 'ny', 'nz']

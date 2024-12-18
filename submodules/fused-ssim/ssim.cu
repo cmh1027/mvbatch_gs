@@ -392,7 +392,8 @@ __global__ void fusedssimCUDA(
   float* ssim_map,
   float* dm_dmu1,
   float* dm_dsigma1_sq,
-  float* dm_dsigma12
+  float* dm_dsigma12,
+  bool normalize
 )
 {
   auto block = cg::this_thread_block();
@@ -421,7 +422,7 @@ __global__ void fusedssimCUDA(
   do_separable_conv_x(buf_mask, buf3, H, W);
   block.sync();
   float denom = do_separable_conv_y(buf3, H, W);
-  float denom_inv = (denom > 0) ? (1/denom) : 1;
+  float denom_inv = (denom > 0 && normalize) ? (1/denom) : 1;
   block.sync();
 
   for (int i = 0; i < CH; ++i) {
@@ -571,7 +572,8 @@ std::tuple<torch::Tensor,torch::Tensor,torch::Tensor,torch::Tensor>
 fusedssim(
   torch::Tensor &pred, // (B, 3, H, W)
   torch::Tensor &gt,
-  torch::Tensor &mask
+  torch::Tensor &mask,
+  bool normalize
 )
 {
   const at::cuda::OptionalCUDAGuard device_guard(device_of(pred));
@@ -599,7 +601,8 @@ fusedssim(
     target.contiguous().data<float>(),
     dm_dmu1.contiguous().data<float>(),
     dm_dsigma1_sq.contiguous().data<float>(),
-    dm_dsigma12.contiguous().data<float>()
+    dm_dsigma12.contiguous().data<float>(),
+    normalize
   );
   ERROR_CHECK
   return std::make_tuple(target, dm_dmu1, dm_dsigma1_sq, dm_dsigma12);

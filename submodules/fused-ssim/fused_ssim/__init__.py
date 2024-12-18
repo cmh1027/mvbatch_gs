@@ -7,8 +7,8 @@ from fused_ssim_cuda import fusedssim, fusedssim_backward
 
 class FusedSSIMMap(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, pred, gt, mask):
-        ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = fusedssim(pred, gt, mask)
+    def forward(ctx, pred, gt, mask, normalize):
+        ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = fusedssim(pred, gt, mask, normalize)
         ctx.save_for_backward(pred.detach(), gt, mask, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
 
         return ssim_map
@@ -20,7 +20,7 @@ class FusedSSIMMap(torch.autograd.Function):
         grad = fusedssim_backward(pred, gt, mask, dL_dmap, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
         return grad, None, None, None
 
-def fused_ssim(pred, gt, mask):
+def fused_ssim(pred, gt, mask, normalize=True):
     if len(pred.shape) == 3:
         pred = pred[None]
         gt = gt[None]
@@ -30,4 +30,4 @@ def fused_ssim(pred, gt, mask):
     else:
         if len(mask.shape) == 2:
             mask = mask[None]
-    return FusedSSIMMap.apply(pred, gt, mask)
+    return FusedSSIMMap.apply(pred, gt, mask, normalize)

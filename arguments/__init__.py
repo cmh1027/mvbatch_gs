@@ -85,17 +85,19 @@ class PipelineParams(ParamGroup):
 class OptimizationParams(ParamGroup):
     def __init__(self, parser):
         self.iterations = 30_000
-        self.position_lr_init = 0.00016
-        self.position_lr_final = 0.0000016
-        self.position_lr_delay_mult = 0.01
-        self.position_lr_max_steps = 30_000
+        self.position_lr = 0.00016
         self.feature_lr = 0.0025
         self.opacity_lr = 0.05
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
-        self.lr_coef = 1.
+        self.position_lr_coef = 0.01
+        self.feature_lr_coef = 0.1
+        self.opacity_lr_coef = 0.1
+        self.scaling_lr_coef = 0.1
+        self.rotation_lr_coef = 0.1
         self.percent_dense = 0.01
         self.loss_type = "l1"
+        self.schedule_all = False
 
         self.lambda_dssim = 0.2
 
@@ -121,19 +123,13 @@ class OptimizationParams(ParamGroup):
         self.noise_lr = 5e5
         self.scale_reg = 0.01
         self.opacity_reg = 0.01
+        self.opacity_reg_onlyMV = 0.01
         
-        self.batch_sample_strategy = "random" # ["max", "random"]
-        self.batch_sample_count = True
         self.batch_size = 1
-        self.batch_until = -1
         self.mask_height = 32
         self.mask_width = 32
-        self.grid_size = 1
 
         self.only_psnr = False
-        self.log_batch = False
-        self.log_batch_interval = 1
-
         self.evaluate_time = False
         self.gs_type = "mcmc" # ["original", "mcmc"]
 
@@ -145,6 +141,8 @@ class OptimizationParams(ParamGroup):
         self.split_original = False
         self.time_check = False
         self.ssim_schedule = False
+        self.ssim_schedule_coef = 0.2
+        self.ssim_no_normalize = False
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

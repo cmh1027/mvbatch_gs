@@ -581,8 +581,7 @@ renderCUDA(
 			contributor--;
 			if (contributor >= last_contributor)
 				continue;
-			// assert(collected_id[j] < BR);
-			// if(point_batch_index[collected_id[j]] != batch_idx) continue;
+
 			// Compute blending values, as before.
 			const float2 xy = collected_xy[j];
 			const float2 d = { xy.x - pixf.x, xy.y - pixf.y };

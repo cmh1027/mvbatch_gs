@@ -35,7 +35,7 @@ from metrics import evaluate
 from datetime import timedelta
 import time
 from diff_gaussian_rasterization import make_category_mask
-from math import ceil
+import kornia
 
 def training(dataset, opt, pipe, args):
 	saving_iterations = args.save_iterations
@@ -47,14 +47,8 @@ def training(dataset, opt, pipe, args):
 	else:
 		testing_iterations = args.test_iterations
 
-	if opt.lr_coef != 1.:
-		opt.position_lr_init *= opt.lr_coef
-		opt.position_lr_final *= opt.lr_coef
-		opt.position_lr_delay_mult *= opt.lr_coef
-		opt.feature_lr *= opt.lr_coef
-		opt.opacity_lr *= opt.lr_coef
-		opt.scaling_lr *= opt.lr_coef
-		opt.rotation_lr *= opt.lr_coef
+	if opt.batch_size > 1:
+		opt.opacity_reg = opt.opacity_reg_onlyMV
 
 	if opt.gs_type == "original":
 		dataset.init_scale = 1
@@ -95,7 +89,7 @@ def training(dataset, opt, pipe, args):
 	dummy_cam = scene.getTrainCameras()[0]
 	H, W = dummy_cam.image_height, dummy_cam.image_width
 
-	assert opt.mask_height == opt.mask_width
+	assert opt.mask_height == opt.mask_                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   width
 	partial_height = (H + opt.mask_height - 1) // opt.mask_height
 	partial_width = (W + opt.mask_width - 1) // opt.mask_width
 
@@ -112,15 +106,11 @@ def training(dataset, opt, pipe, args):
 		if iteration == forced_exit:
 			print("FORCED EXIT")
 			break   
-		xyz_lr = gaussians.update_learning_rate(iteration)
+		lrs = gaussians.update_learning_rate(iteration, opt.schedule_all)
 
 		# Every 1000 its we increase the levels of SH up to a maximum degree
 		if iteration % 1000 == 0:
 			gaussians.oneupSHdegree()
-
-		if opt.batch_until > 0 and iteration == (opt.batch_until+1) and opt.batch_size > 1:
-			print("BATCH IS TURNED OFF")
-			opt.batch_size = 1
 
 		# Pick a random Camera
 		viewpoints = scene.getTrainCameras().copy()
@@ -138,17 +128,9 @@ def training(dataset, opt, pipe, args):
 
 		bg = torch.rand((3), device="cuda") if opt.random_background else background
 
-		if opt.grid_size == 1:
-			pmask = torch.sort(torch.rand(partial_height * partial_width, opt.mask_height * opt.mask_width, device=torch.device('cuda'))).indices.to(torch.int32)
-		else:
-			assert opt.mask_height % opt.grid_size == 0
-			assert opt.mask_width % opt.grid_size == 0
-			x = torch.arange(opt.mask_height * opt.mask_width, device=torch.device('cuda')).reshape(opt.mask_height, opt.mask_width)
-			x = x[::opt.grid_size, ::opt.grid_size].flatten()
-			x = x[torch.rand(partial_height * partial_width, x.shape[0], device=torch.device('cuda')).sort(dim=-1).indices]
-			x = torch.stack([x+i for i in range(opt.grid_size)], dim=-1)
-			x = torch.stack([x+i*opt.mask_width for i in range(opt.grid_size)], dim=-1)
-			pmask = x.reshape(partial_height * partial_width, -1).to(torch.int32)
+
+		pmask = torch.sort(torch.rand(partial_height * partial_width, opt.mask_height * opt.mask_width, device=torch.device('cuda'))).indices.to(torch.int32)
+
 			
 		kwargs = {
 			"mask" : pmask,
@@ -181,17 +163,17 @@ def training(dataset, opt, pipe, args):
 			collage_gt = torch.gather(gt_images, 0, collage_mask.unsqueeze(0)).squeeze(0)
 			Ll = pixel_loss(image, collage_gt, ltype=opt.loss_type)
 			loss = (1.0 - opt.lambda_dssim) * Ll
-			collage_mask_binary = torch.zeros_like(collage_mask[0:1]).repeat(opt.batch_size, 1, 1).float()
-			collage_mask_binary.scatter_add_(0, collage_mask[0:1], torch.ones_like(collage_mask_binary)) # (B, H, W)
 			if opt.lambda_dssim > 0:
+				collage_mask_binary = torch.zeros_like(collage_mask[0:1]).repeat(opt.batch_size, 1, 1).float()
+				collage_mask_binary.scatter_add_(0, collage_mask[0:1], torch.ones_like(collage_mask_binary)) # (B, H, W)
 				if opt.ssim_schedule:
 					_s, _e = 6000, 3000
-					coef_merge = min(1, max(0, (iteration - _s) / (opt.iterations - _s - _e))) * 0.2
+					coef_merge = min(1, max(0, (iteration - _s) / (opt.iterations - _s - _e))) * opt.ssim_schedule_coef
 					coef_sep = 1 - coef_merge
 				else:
 					coef_sep = 1.0
 				image_sep = collage_mask_binary.unsqueeze(1) * image.unsqueeze(0) # (B, C, H, W)
-				ssim_map_approx = ssim(image_sep, gt_images, mask=collage_mask_binary)
+				ssim_map_approx = ssim(image_sep, gt_images, mask=collage_mask_binary, normalize=not opt.ssim_no_normalize)
 				loss += opt.lambda_dssim * (1 - ssim_map_approx).sum(dim=0).mean() * coef_sep
 				if opt.ssim_schedule and coef_merge > 0:
 					image_merge = image_sep + (1 - collage_mask_binary.unsqueeze(1)) * gt_images
@@ -248,6 +230,8 @@ def training(dataset, opt, pipe, args):
 				}
 				if "coef_merge" in locals():
 					postfix["c_m"] = coef_merge
+				if opt.gs_type == "mcmc":
+					postfix["o_reg"] = opt.opacity_reg
 				progress_bar.set_postfix(postfix)
 				progress_bar.update(10)
 			if iteration == opt.iterations:
@@ -321,14 +305,7 @@ def training(dataset, opt, pipe, args):
 					figs = [pred, gt]
 					save_image(torch.cat(figs, dim=1), os.path.join(dataset.model_path, f"vis/iter_{iteration}.png"))
 
-			if opt.log_batch and iteration % opt.log_batch_interval == 0 and not opt.evaluate_time:
-				os.makedirs(os.path.join(dataset.model_path, "batch"), exist_ok=True)
-				with torch.no_grad():
-					for i, image in enumerate(gt_images.unbind(dim=0)):
-						os.makedirs(os.path.join(dataset.model_path, f"batch/{'%05d' % iteration}"), exist_ok=True)
-						save_image(image, os.path.join(dataset.model_path, f"batch/{'%05d' % iteration}/{'%05d' % i}.png"))
 
-			# Optimizer step
 			if iteration < opt.iterations:
 				gaussians.optimizer.step()
 				gaussians.optimizer.zero_grad(set_to_none = True)
@@ -339,13 +316,15 @@ def training(dataset, opt, pipe, args):
 					def op_sigmoid(x, k=100, x0=0.995):
 						return 1 / (1 + torch.exp(-k * (x - x0)))
 					
-					noise = torch.randn_like(gaussians._xyz) * (op_sigmoid(1- gaussians.get_opacity))*args.noise_lr*xyz_lr
+					noise = torch.randn_like(gaussians._xyz) * (op_sigmoid(1- gaussians.get_opacity))*args.noise_lr*lrs["xyz"]
 					noise = torch.bmm(actual_covariance, noise.unsqueeze(-1)).squeeze(-1)
 					gaussians._xyz.add_(noise)
 
 			if (iteration in checkpoint_iterations) and not opt.evaluate_time:
 				print("\n[ITER {}] Saving Checkpoint".format(iteration))
-				torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")           
+				torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+			
+			torch.cuda.empty_cache()
 
 	end_time = time.time()
 	with open(os.path.join(dataset.model_path, "info.txt"), "w") as f:
@@ -447,8 +426,6 @@ def training_report(opt, tb_writer, iteration, Ll, loss, testing_iterations, sce
 							tb_writer.add_scalar('test' + '/loss_viewpoint - pcoef_freq_low', pcoef_low_freq_test, iteration)
 							tb_writer.add_scalar('test' + '/loss_viewpoint - pcoef_freq_high', pcoef_high_freq_test, iteration)
 						tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
-
-					torch.cuda.empty_cache()
 
 def load_config(config_file):
 	with open(config_file, 'r') as file:

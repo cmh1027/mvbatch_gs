@@ -8,7 +8,8 @@ std::tuple<torch::Tensor,torch::Tensor,torch::Tensor,torch::Tensor>
 fusedssim(
     torch::Tensor &pred,
     torch::Tensor &gt,
-    torch::Tensor &mask
+    torch::Tensor &mask,
+    bool normalize
 );
 
 torch::Tensor
