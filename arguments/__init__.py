@@ -140,9 +140,9 @@ class OptimizationParams(ParamGroup):
 
         self.split_original = False
         self.time_check = False
-        self.ssim_schedule = False
-        self.ssim_schedule_coef = 0.2
         self.ssim_no_normalize = False
+        self.viewpoint_replacement = False
+        self.viewpoint_weight = False
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

@@ -89,7 +89,7 @@ def training(dataset, opt, pipe, args):
 	dummy_cam = scene.getTrainCameras()[0]
 	H, W = dummy_cam.image_height, dummy_cam.image_width
 
-	assert opt.mask_height == opt.mask_                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   width
+	assert opt.mask_height == opt.mask_width
 	partial_height = (H + opt.mask_height - 1) // opt.mask_height
 	partial_width = (W + opt.mask_width - 1) // opt.mask_width
 
@@ -121,7 +121,11 @@ def training(dataset, opt, pipe, args):
 		if opt.batch_size == 1:
 			cam_idxs = torch.tensor([cam_idx], device=torch.device('cuda'))
 		else:
-			cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size)
+			if opt.viewpoint_weight:
+				coef = iteration/opt.iterations
+			else:
+				coef = 0.0
+			cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, replacement=opt.viewpoint_replacement, coef=coef)
 
 		cam_idxs.clamp_(max=len(viewpoints)-1)
 		cams = [viewpoints[idx] for idx in cam_idxs]
@@ -166,19 +170,16 @@ def training(dataset, opt, pipe, args):
 			if opt.lambda_dssim > 0:
 				collage_mask_binary = torch.zeros_like(collage_mask[0:1]).repeat(opt.batch_size, 1, 1).float()
 				collage_mask_binary.scatter_add_(0, collage_mask[0:1], torch.ones_like(collage_mask_binary)) # (B, H, W)
-				if opt.ssim_schedule:
-					_s, _e = 6000, 3000
-					coef_merge = min(1, max(0, (iteration - _s) / (opt.iterations - _s - _e))) * opt.ssim_schedule_coef
-					coef_sep = 1 - coef_merge
-				else:
-					coef_sep = 1.0
 				image_sep = collage_mask_binary.unsqueeze(1) * image.unsqueeze(0) # (B, C, H, W)
-				ssim_map_approx = ssim(image_sep, gt_images, mask=collage_mask_binary, normalize=not opt.ssim_no_normalize)
-				loss += opt.lambda_dssim * (1 - ssim_map_approx).sum(dim=0).mean() * coef_sep
-				if opt.ssim_schedule and coef_merge > 0:
-					image_merge = image_sep + (1 - collage_mask_binary.unsqueeze(1)) * gt_images
-					ssim_map_merge = ssim(image_merge, gt_images)
-					loss += opt.lambda_dssim * (1 - ssim_map_merge).sum(dim=0).mean() * coef_merge
+				unique_cams = cam_idxs.unique()
+				indices = torch.searchsorted(unique_cams, cam_idxs)
+				image_sep_ = torch.zeros_like(image_sep[0:1]).repeat(len(unique_cams), 1, 1, 1)
+				collage_mask_binary_ = torch.zeros_like(collage_mask_binary[0:1]).repeat(len(unique_cams), 1, 1)
+				image_sep_.scatter_add_(0, indices.view(-1, 1, 1, 1).expand(-1, *image_sep.shape[1:]), image_sep)
+				gt_images_ = gt_images[indices.unique()]
+				collage_mask_binary_.scatter_add_(0, indices.view(-1, 1, 1).expand(-1, *collage_mask_binary.shape[1:]), collage_mask_binary)
+				ssim_map = ssim(image_sep_, gt_images_, mask=collage_mask_binary_, normalize=not opt.ssim_no_normalize)
+				loss += opt.lambda_dssim * (1 - ssim_map).sum(dim=0).mean() 
 		else:
 			gt_image = cams[0].original_image
 			Ll = pixel_loss(image, gt_image, ltype=opt.loss_type)
@@ -207,7 +208,7 @@ def training(dataset, opt, pipe, args):
 		if opt.time_check:
 			torch.cuda.synchronize()
 			backward_time = time.time() - start
-			
+
 
 		if opt.time_check and not opt.evaluate_time and iteration % 10 == 0:
 			tb_writer.add_scalar(f'time/forward/measure', log_buffer["forward_measureTime"], iteration)
@@ -228,8 +229,6 @@ def training(dataset, opt, pipe, args):
 					"num_pts": len(gaussians._xyz),
 					"batch": opt.batch_size
 				}
-				if "coef_merge" in locals():
-					postfix["c_m"] = coef_merge
 				if opt.gs_type == "mcmc":
 					postfix["o_reg"] = opt.opacity_reg
 				progress_bar.set_postfix(postfix)
