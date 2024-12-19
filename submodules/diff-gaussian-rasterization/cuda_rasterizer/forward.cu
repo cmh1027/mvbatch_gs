@@ -324,7 +324,6 @@ __global__ void preprocessCUDA(int BR, int P, int B, int D, int M,
 	points_xy_image[idx] = point_image;
 
 	// Compute 2D screen-space covariance matrix
-	// float3 cov = computeCov2D(p_orig, focal_x[batch_idx], focal_y[batch_idx], tan_fovx[batch_idx], tan_fovy[batch_idx], cov3Ds[point_idx], viewmatrix, low_pass);
 	float3 cov = cov2Ds[abs_idx];
 
 	// Invert covariance (EWA algorithm)
@@ -383,6 +382,7 @@ renderCUDA(
 	float* __restrict__ out_depth,
 	float* __restrict__ out_trans,
 	const int* __restrict__ mask, // (PW*PH, BLOCK_X*BLOCK_Y)
+	const int* __restrict__ batch_map, 
 	const int* __restrict__ point_batch_index)
 {
 	// Identify current tile and associated min/max pixel range.
@@ -399,8 +399,9 @@ renderCUDA(
 	auto PH = (H + BLOCK_Y - 1) / BLOCK_Y;
 	auto PW = (W + BLOCK_X - 1) / BLOCK_X;
 
-	auto batch_idx = block.group_index().z;
-	auto pix_in_block_id = block_id * BLOCK_SIZE + THREAD_SIZE * batch_idx + block.thread_index().x;
+	auto part_idx = block.group_index().z;
+	auto batch_idx = batch_map[part_idx];
+	auto pix_in_block_id = block_id * BLOCK_SIZE + THREAD_SIZE * part_idx + block.thread_index().x;
 
 	bool mask_inside = pix_in_block_id < PH * PW * BLOCK_SIZE;
 	int pix_in_block;
@@ -473,8 +474,6 @@ renderCUDA(
 		{
 			// Keep track of current position in range
 			contributor++;
-			// ignore if batch_idx of the point is not matched with the value in the mask 
-			// if(point_batch_index[collected_id[j]] != batch_idx) continue;
 
 			// Resample using conic matrix (cf. "Surface 
 			// Splatting" by Zwicker et al., 2001)
@@ -530,7 +529,7 @@ void FORWARD::render(
 	const dim3 grid, dim3 block,
 	const uint2* ranges,
 	const uint32_t* point_list,
-	int W, int H, int B,
+	int W, int H, int B, int S,
 	const float2* means2D,
 	const float* colors,
 	const float* depths,
@@ -542,32 +541,33 @@ void FORWARD::render(
 	float* out_depth,
 	float* out_trans,
 	const int* mask,
+	const int* batch_map,
 	const int* point_batch_index
 )
 {
-	switch(B){
+	switch(S){
 		case 1:
 			renderCUDA<CHANNELS, 1> << <grid, block >> > (
-				ranges, point_list, W, H, B, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_depth, out_trans, mask, point_batch_index
+				ranges, point_list, W, H, B, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_depth, out_trans, mask, batch_map, point_batch_index
 			);
 			break;
 		case 2:
 			renderCUDA<CHANNELS, 2> << <grid, block >> > (
-				ranges, point_list, W, H, B, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_depth, out_trans, mask, point_batch_index
+				ranges, point_list, W, H, B, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_depth, out_trans, mask, batch_map, point_batch_index
 			);
 			break;
 		case 4:
 			renderCUDA<CHANNELS, 4> << <grid, block >> > (
-				ranges, point_list, W, H, B, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_depth, out_trans, mask, point_batch_index
+				ranges, point_list, W, H, B, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_depth, out_trans, mask, batch_map, point_batch_index
 			);
 			break;
 		case 8:
 			renderCUDA<CHANNELS, 8> << <grid, block >> > (
-				ranges, point_list, W, H, B, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_depth, out_trans, mask, point_batch_index
+				ranges, point_list, W, H, B, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_depth, out_trans, mask, batch_map, point_batch_index
 			);
 			break;
 		default:
-			printf("Batch size %d is not supported", B);
+			printf("Batch size %d is not supported", S);
 			exit(0);
 	}
 

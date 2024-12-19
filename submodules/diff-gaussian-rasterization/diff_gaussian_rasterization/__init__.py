@@ -68,6 +68,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.sh_degree,
             raster_settings.campos,
             raster_settings.mask,
+            raster_settings.batch_map,
             raster_settings.low_pass,
             raster_settings.time_check,
             raster_settings.debug
@@ -136,6 +137,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                 binningBuffer,
                 imgBuffer,
                 mask,
+                raster_settings.batch_map,
                 raster_settings.low_pass,
                 raster_settings.grad_sep,
                 raster_settings.return_2d_grad,
@@ -186,6 +188,7 @@ class GaussianRasterizationSettings(NamedTuple):
     grad_sep: bool
     return_2d_grad: bool
     time_check: bool
+    batch_map : torch.Tensor
 
 class GaussianRasterizer(nn.Module):
     def __init__(self, raster_settings):
@@ -221,5 +224,5 @@ def compute_relocation(opacity_old, scale_old, N, binoms, n_max):
     new_opacity, new_scale = _C.compute_relocation(opacity_old, scale_old, N.int(), binoms, n_max)
     return new_opacity, new_scale 
 
-def make_category_mask(mask, H, W, B):
-    return _C.make_category_mask(mask, H, W, B)
+def make_category_mask(mask, batch_map, H, W, B):
+    return _C.make_category_mask(mask, batch_map, H, W, B)

@@ -40,6 +40,7 @@ __global__ void compute_relocation(
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 make_category_mask(
     const int* mask, // (PW*PH, BLOCK_X*BLOCK_Y)
+    const int* batch_map,
     int H, int W, int B,
     int* output_mask)
 {
@@ -69,7 +70,7 @@ make_category_mask(
 	float2 pixf = { (float)pix.x, (float)pix.y };
     bool inside = pix.x < W && pix.y < H;
     if(!inside) return;
-    output_mask[pix_id] = batch_idx;
+    output_mask[pix_id] = batch_map[batch_idx];
 }
 
 
@@ -91,12 +92,13 @@ void UTILS::ComputeRelocation(
 
 void UTILS::MakeCategoryMask(
     const int* mask,
+    const int* batch_map,
     int H, int W, int B,
     int* output_mask
 )
 {
 	dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, 1);
 	dim3 block(BLOCK_X * BLOCK_Y, 1, 1);
-	make_category_mask<<<grid, block>>>(mask, H, W, B, output_mask);
+	make_category_mask<<<grid, block>>>(mask, batch_map, H, W, B, output_mask);
     ERROR_CHECK
 }

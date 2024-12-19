@@ -52,6 +52,7 @@ RasterizeGaussiansCUDA(
 	const int degree,
 	const torch::Tensor& campos,
 	torch::Tensor& mask,
+	torch::Tensor& batch_map,
 	const float low_pass,
 	const bool time_check,
 	const bool debug)
@@ -72,8 +73,9 @@ RasterizeGaussiansCUDA(
 	const int H = image_height;
 	const int W = image_width;
 	const int B = viewmatrix.size(0);
+	const int S = batch_map.size(0);
 
-	assert(BLOCK_X * BLOCK_Y % B == 0);
+	assert(BLOCK_X * BLOCK_Y % S == 0);
 
 	auto int_opts = means3D.options().dtype(torch::kInt32);
 	auto float_opts = means3D.options().dtype(torch::kFloat32);
@@ -114,7 +116,7 @@ RasterizeGaussiansCUDA(
 			binningFunc,
 			imgFunc,
 			cacheFunc,
-			P, degree, M, B,
+			P, degree, M, B, S,
 			background.contiguous().data<float>(),
 			W, H,
 			means3D.contiguous().data<float>(),
@@ -135,6 +137,7 @@ RasterizeGaussiansCUDA(
 			out_trans.contiguous().data<float>(),
 			radii.contiguous().data<int>(),
 			mask.contiguous().data<int>(),
+			batch_map.contiguous().data<int>(),
 			low_pass,
 			time_check,
 			debug
@@ -173,6 +176,7 @@ RasterizeGaussiansBackwardCUDA(
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
 	torch::Tensor& mask,
+	torch::Tensor& batch_map,
 	const float low_pass,
 	const bool grad_sep,
 	const bool return_2d_grad,
@@ -180,6 +184,7 @@ RasterizeGaussiansBackwardCUDA(
 	const bool debug)
 {
 	const int B = viewmatrix.size(0);
+	const int S = batch_map.size(0);
 	const int P = means3D.size(0);
 	const int H = dL_dout_color.size(1);
 	const int W = dL_dout_color.size(2);
@@ -223,7 +228,7 @@ RasterizeGaussiansBackwardCUDA(
 	double preprocessTime, renderTime;
 	if(BR != 0)
 	{  
-		auto returned = CudaRasterizer::Rasterizer::backward(P, degree, M, B, R, BR,
+		auto returned = CudaRasterizer::Rasterizer::backward(P, degree, M, B, S, R, BR,
 		background.contiguous().data<float>(),
 		W, H, 
 		means3D.contiguous().data<float>(),
@@ -259,6 +264,7 @@ RasterizeGaussiansBackwardCUDA(
 		dL_dscales.contiguous().data<float>(),
 		dL_drotations.contiguous().data<float>(),
 		mask.contiguous().data<int>(),
+		batch_map.contiguous().data<int>(),
 		point_idx.contiguous().data<int>(),
 		low_pass,
 		return_2d_grad,
@@ -348,6 +354,7 @@ std::tuple<torch::Tensor, torch::Tensor> ComputeRelocationCUDA(
 
 torch::Tensor MakeCategoryMaskCUDA(
 	torch::Tensor& mask,
+	torch::Tensor& batch_map,
 	int H, int W, int B
 )
 {
@@ -357,6 +364,7 @@ torch::Tensor MakeCategoryMaskCUDA(
 
 	UTILS::MakeCategoryMask(
 		mask.contiguous().data<int>(),
+		batch_map.contiguous().data<int>(),
 		H, W, B,
 		category_mask.contiguous().data<int>()
 	);

@@ -105,5 +105,6 @@ class Scene:
         else:
             weight = torch.ones(len(self.getTrainCameras()), device=torch.device('cuda'))
             weight[idx] += coef * len(self.getTrainCameras()) / N
-            selected = torch.multinomial(weight, N, replacement=True)
+            indices = torch.multinomial(weight, N-1, replacement=True)
+            selected = torch.cat([torch.tensor([idx], device=torch.device('cuda')), indices])
         return selected.sort().values

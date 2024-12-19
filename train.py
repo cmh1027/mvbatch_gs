@@ -128,10 +128,13 @@ def training(dataset, opt, pipe, args):
 			cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, replacement=opt.viewpoint_replacement, coef=coef)
 
 		cam_idxs.clamp_(max=len(viewpoints)-1)
+		unique_cam_idxs = cam_idxs.unique()
+		batch_map = torch.searchsorted(unique_cam_idxs, cam_idxs).to(torch.int32)
+
 		cams = [viewpoints[idx] for idx in cam_idxs]
+		unique_cams = [viewpoints[idx] for idx in unique_cam_idxs]
 
 		bg = torch.rand((3), device="cuda") if opt.random_background else background
-
 
 		pmask = torch.sort(torch.rand(partial_height * partial_width, opt.mask_height * opt.mask_width, device=torch.device('cuda'))).indices.to(torch.int32)
 
@@ -140,12 +143,14 @@ def training(dataset, opt, pipe, args):
 			"mask" : pmask,
 			"grad_sep": opt.grad_sep,
 			"time_check": opt.time_check,
-			"return_2d_grad": opt.gs_type == "original"
+			"return_2d_grad": opt.gs_type == "original",
+			"batch_map": batch_map
 		} 
 		if opt.time_check:
 			torch.cuda.synchronize()
 			start = time.time()
-		render_pkg = render(cams, gaussians, pipe, bg, **kwargs)
+
+		render_pkg = render(unique_cams, gaussians, pipe, bg, **kwargs)
 		if opt.time_check:
 			torch.cuda.synchronize()
 			forward_time = time.time() - start
@@ -160,25 +165,20 @@ def training(dataset, opt, pipe, args):
 			render_pkg["log_buffer"]
 		)
 
+
 		if len(cams) > 1:
-			gt_images = torch.stack([cam.original_image.cuda() for cam in cams]) # (B, C, H, W)
-			collage_mask = make_category_mask(pmask, H, W, opt.batch_size).to(torch.int64)
+			gt_images = torch.stack([cam.original_image.cuda() for cam in unique_cams]) # (B, C, H, W)
+			collage_mask = make_category_mask(pmask, batch_map, H, W, opt.batch_size).to(torch.int64)
 			collage_mask = collage_mask.unsqueeze(0).repeat(3,1,1)
 			collage_gt = torch.gather(gt_images, 0, collage_mask.unsqueeze(0)).squeeze(0)
 			Ll = pixel_loss(image, collage_gt, ltype=opt.loss_type)
 			loss = (1.0 - opt.lambda_dssim) * Ll
+
 			if opt.lambda_dssim > 0:
-				collage_mask_binary = torch.zeros_like(collage_mask[0:1]).repeat(opt.batch_size, 1, 1).float()
+				collage_mask_binary = torch.zeros_like(collage_mask[0:1]).repeat(len(unique_cams), 1, 1).float()
 				collage_mask_binary.scatter_add_(0, collage_mask[0:1], torch.ones_like(collage_mask_binary)) # (B, H, W)
 				image_sep = collage_mask_binary.unsqueeze(1) * image.unsqueeze(0) # (B, C, H, W)
-				unique_cams = cam_idxs.unique()
-				indices = torch.searchsorted(unique_cams, cam_idxs)
-				image_sep_ = torch.zeros_like(image_sep[0:1]).repeat(len(unique_cams), 1, 1, 1)
-				collage_mask_binary_ = torch.zeros_like(collage_mask_binary[0:1]).repeat(len(unique_cams), 1, 1)
-				image_sep_.scatter_add_(0, indices.view(-1, 1, 1, 1).expand(-1, *image_sep.shape[1:]), image_sep)
-				gt_images_ = gt_images[indices.unique()]
-				collage_mask_binary_.scatter_add_(0, indices.view(-1, 1, 1).expand(-1, *collage_mask_binary.shape[1:]), collage_mask_binary)
-				ssim_map = ssim(image_sep_, gt_images_, mask=collage_mask_binary_, normalize=not opt.ssim_no_normalize)
+				ssim_map = ssim(image_sep, gt_images, mask=collage_mask_binary, normalize=not opt.ssim_no_normalize)
 				loss += opt.lambda_dssim * (1 - ssim_map).sum(dim=0).mean() 
 		else:
 			gt_image = cams[0].original_image

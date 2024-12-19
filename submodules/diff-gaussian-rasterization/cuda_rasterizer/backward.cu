@@ -467,6 +467,7 @@ renderCUDA(
 	float* __restrict__ dL_dcolor,
 	float* __restrict__ dL_ddepths,
 	const int* __restrict__ mask,
+	const int* __restrict__ batch_map,
 	const int* __restrict__ point_index,
 	const int* __restrict__ point_batch_index,
 	const bool return_2d_grad)
@@ -485,8 +486,9 @@ renderCUDA(
 	auto PH = (H + BLOCK_Y - 1) / BLOCK_Y;
 	auto PW = (W + BLOCK_X - 1) / BLOCK_X;
 
-	auto batch_idx = block.group_index().z;
-	auto pix_in_block_id = block_id * BLOCK_SIZE + THREAD_SIZE * batch_idx + block.thread_index().x;
+	auto part_idx = block.group_index().z;
+	auto batch_idx = batch_map[part_idx];
+	auto pix_in_block_id = block_id * BLOCK_SIZE + THREAD_SIZE * part_idx + block.thread_index().x;
 
 	bool mask_inside = pix_in_block_id < PH * PW * BLOCK_SIZE;
 	int pix_in_block;
@@ -759,7 +761,7 @@ void BACKWARD::render(
 	const dim3 grid, const dim3 block,
 	const uint2* ranges,
 	const uint32_t* point_list,
-	int W, int H, int B, int BR,
+	int W, int H, int B, int S, int BR,
 	const float* bg_color,
 	const float2* means2D,
 	const float4* conic_opacity,
@@ -778,41 +780,42 @@ void BACKWARD::render(
 	float* dL_dcolor,
 	float* dL_ddepths,
 	const int* mask,
+	const int* batch_map,
 	const int* point_index,
 	const int* point_batch_index,
 	const bool return_2d_grad)
 {
-	switch(B){
+	switch(S){
 		case 1:
 			renderCUDA<CHANNELS, 1> << <grid, block >> >(
 				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, depths, final_Ts, n_contrib, 
 				dL_dpixels, dL_dpixel_depths, dL_dpixel_trans, dL_dmean2D, dL_dmean2D_sq, dL_dmean2D_N, dL_dconic2D, dL_dopacity, dL_dcolor, dL_ddepths,
-				mask, point_index, point_batch_index, return_2d_grad
+				mask, batch_map, point_index, point_batch_index, return_2d_grad
 			);
 			break;
 		case 2:
 			renderCUDA<CHANNELS, 2> << <grid, block >> >(
 				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, depths, final_Ts, n_contrib, 
 				dL_dpixels, dL_dpixel_depths, dL_dpixel_trans, dL_dmean2D, dL_dmean2D_sq, dL_dmean2D_N, dL_dconic2D, dL_dopacity, dL_dcolor, dL_ddepths,
-				mask, point_index, point_batch_index, return_2d_grad
+				mask, batch_map, point_index, point_batch_index, return_2d_grad
 			);
 			break;
 		case 4:
 			renderCUDA<CHANNELS, 4> << <grid, block >> >(
 				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, depths, final_Ts, n_contrib, 
 				dL_dpixels, dL_dpixel_depths, dL_dpixel_trans, dL_dmean2D, dL_dmean2D_sq, dL_dmean2D_N, dL_dconic2D, dL_dopacity, dL_dcolor, dL_ddepths,
-				mask, point_index, point_batch_index, return_2d_grad
+				mask, batch_map, point_index, point_batch_index, return_2d_grad
 			);
 			break;
 		case 8:
 			renderCUDA<CHANNELS, 8> << <grid, block >> >(
 				ranges, point_list, W, H, B, BR, bg_color, means2D, conic_opacity, colors, depths, final_Ts, n_contrib, 
 				dL_dpixels, dL_dpixel_depths, dL_dpixel_trans, dL_dmean2D, dL_dmean2D_sq, dL_dmean2D_N, dL_dconic2D, dL_dopacity, dL_dcolor, dL_ddepths,
-				mask, point_index, point_batch_index, return_2d_grad
+				mask, batch_map, point_index, point_batch_index, return_2d_grad
 			);
 			break;
 		default:
-			printf("Batch size %d is not supported", B);
+			printf("Batch size %d is not supported", S);
 			exit(0);
 	}
 	ERROR_CHECK

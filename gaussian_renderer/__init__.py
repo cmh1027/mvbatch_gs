@@ -14,8 +14,8 @@ import math
 from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
-FOV_WARN = False
-def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, mask=None, low_pass=0.3, grad_sep=False, time_check=False, return_2d_grad=False):
+
+def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, mask=None, low_pass=0.3, grad_sep=False, time_check=False, return_2d_grad=False, batch_map=None):
     """
     Render the scene. 
     
@@ -30,6 +30,11 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
         pass
     if type(viewpoint_cameras) is not list:
         viewpoint_cameras = [viewpoint_cameras]
+    if batch_map is None:
+        if len(viewpoint_cameras) == 1:
+            batch_map = torch.tensor([0], device=torch.device('cuda')).int()
+        else:
+            raise NotImplementedError
 
     # Set up rasterization configuration
     image_height = int(viewpoint_cameras[0].image_height)
@@ -60,7 +65,8 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
         low_pass=low_pass,
         grad_sep=grad_sep,
         return_2d_grad=return_2d_grad,
-        time_check=time_check
+        time_check=time_check,
+        batch_map=batch_map
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)

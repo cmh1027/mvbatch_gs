@@ -25,7 +25,7 @@ namespace BACKWARD
 		const dim3 grid, dim3 block,
 		const uint2* ranges,
 		const uint32_t* point_list,
-		int W, int H, int B, int BR,
+		int W, int H, int B, int S, int BR,
 		const float* bg_color,
 		const float2* means2D,
 		const float4* conic_opacity,
@@ -44,6 +44,7 @@ namespace BACKWARD
 		float* dL_dcolors,
 		float* dL_ddepths,
 		const int* mask,
+		const int* batch_map,
 		const int* point_index,
 		const int* point_batch_index,
 		const bool return_2d_grad

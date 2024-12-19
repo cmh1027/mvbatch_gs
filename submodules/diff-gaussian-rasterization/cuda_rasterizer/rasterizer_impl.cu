@@ -302,7 +302,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 	std::function<char* (size_t)> binningBuffer,
 	std::function<char* (size_t)> imageBuffer,
 	std::function<char* (size_t)> cacheBuffer,
-	const int P, int D, int M, int B,
+	const int P, int D, int M, int B, int S,
 	const float* background,
 	const int width, int height,
 	const float* means3D,
@@ -323,6 +323,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 	float* out_trans,
 	int* radii,
 	const int* mask,
+	const int* batch_map,
 	const float low_pass,
 	const bool time_check,
 	bool debug)
@@ -332,9 +333,9 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 
 	const dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
 	const dim3 block(BLOCK_X, BLOCK_Y, 1);
-	const dim3 render_tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, B);
-	const dim3 render_block(BLOCK_X * BLOCK_Y / B, 1, 1);
-	assert(BLOCK_X*BLOCK_Y % B == 0);
+	const dim3 render_tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, S);
+	const dim3 render_block(BLOCK_X * BLOCK_Y / S, 1, 1);
+	assert(BLOCK_X*BLOCK_Y % S == 0);
 
 	size_t cache_chunk_size = required<CacheState>(P, B);
 	char* cache_chunkptr = cacheBuffer(cache_chunk_size);
@@ -473,7 +474,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		render_tile_grid, render_block,
 		imgState.ranges,
 		binningState.point_list,
-		width, height, B,
+		width, height, B, S,
 		geomState.means2D,
 		geomState.rgb,
 		cacheState.depths,
@@ -485,6 +486,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		out_depth,
 		out_trans,
 		mask,
+		batch_map,
 		geomState.point_batch_index
 	), time_check, start, renderTime)
 
@@ -495,7 +497,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 // Produce necessary gradients for optimization, corresponding
 // to forward render pass
 std::tuple<float, float> CudaRasterizer::Rasterizer::backward(
-	const int P, int D, int M, int B, int R, int BR,
+	const int P, int D, int M, int B, int S, int R, int BR,
 	const float* background,
 	const int width, int height,
 	const float* means3D,
@@ -531,6 +533,7 @@ std::tuple<float, float> CudaRasterizer::Rasterizer::backward(
 	float* dL_dscale,
 	float* dL_drot,
 	const int* mask,
+	const int* batch_map,
 	int* point_idx,
 	const float low_pass,
 	const bool return_2d_grad,
@@ -551,8 +554,8 @@ std::tuple<float, float> CudaRasterizer::Rasterizer::backward(
 
 	const dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
 	const dim3 block(BLOCK_X, BLOCK_Y, 1);
-	const dim3 render_tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, B);
-	const dim3 render_block(BLOCK_X * BLOCK_Y / B, 1, 1);
+	const dim3 render_tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, S);
+	const dim3 render_block(BLOCK_X * BLOCK_Y / S, 1, 1);
 	// Compute loss gradients w.r.t. 2D mean position, conic matrix,
 	// opacity and RGB of Gaussians from per-pixel loss gradients.
 	// If we were given precomputed colors and not SHs, use them.
@@ -561,7 +564,7 @@ std::tuple<float, float> CudaRasterizer::Rasterizer::backward(
 		render_tile_grid, render_block,
 		imgState.ranges,
 		binningState.point_list,
-		width, height, B, BR,
+		width, height, B, S, BR,
 		background,
 		geomState.means2D,
 		geomState.conic_opacity,
@@ -580,6 +583,7 @@ std::tuple<float, float> CudaRasterizer::Rasterizer::backward(
 		dL_dcolor,
 		dL_ddepth,
 		mask,
+		batch_map,
 		geomState.point_index,
 		geomState.point_batch_index,
 		return_2d_grad

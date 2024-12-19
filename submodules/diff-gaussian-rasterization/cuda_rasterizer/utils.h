@@ -20,6 +20,7 @@ namespace UTILS
 
     void MakeCategoryMask(
         const int* mask,
+        const int* batch_map,
         int H, int W, int B,
         int* output_mask
     );

@@ -33,6 +33,7 @@ RasterizeGaussiansCUDA(
 	const int degree,
 	const torch::Tensor& campos,
 	torch::Tensor& mask,
+	torch::Tensor& batch_map,
 	const float low_pass,
 	const bool time_check,
 	const bool debug);
@@ -62,6 +63,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
 	torch::Tensor& mask,
+	torch::Tensor& batch_map,
 	const float low_pass,
 	const bool grad_sep,
 	const bool return_2d_grad,
@@ -81,6 +83,7 @@ std::tuple<torch::Tensor, torch::Tensor> ComputeRelocationCUDA(
 		const int n_max);
 
 torch::Tensor MakeCategoryMaskCUDA(
-	torch::Tensor& mask,
+	torch::Tensor& mask, 
+	torch::Tensor& batch_map,
 	int H, int W, int B
 );

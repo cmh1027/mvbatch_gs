@@ -33,7 +33,7 @@ namespace CudaRasterizer
 			std::function<char* (size_t)> binningBuffer,
 			std::function<char* (size_t)> imageBuffer,
 			std::function<char* (size_t)> cacheBuffer,
-			const int P, int D, int M, int B,
+			const int P, int D, int M, int B, int S,
 			const float* background,
 			const int width, int height,
 			const float* means3D,
@@ -54,12 +54,13 @@ namespace CudaRasterizer
 			float* out_trans,
 			int* radii,
 			const int* mask,
+			const int* batch_map,
 			const float low_pass,
 			const bool time_check,
 			bool debug = false);
 
 		static std::tuple<float, float> backward(
-			const int P, int D, int M, int B, int R, int BR,
+			const int P, int D, int M, int B, int S, int R, int BR,
 			const float* background,
 			const int width, int height,
 			const float* means3D,
@@ -95,6 +96,7 @@ namespace CudaRasterizer
 			float* dL_dscale,
 			float* dL_drot,
 			const int* mask,
+			const int* batch_map,
 			int* point_idx,
 			const float low_pass,
 			const bool return_2d_grad,
