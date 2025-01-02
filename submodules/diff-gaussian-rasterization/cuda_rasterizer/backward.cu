@@ -539,14 +539,14 @@ renderCUDA(
 
 	float accum_rec[C] = { 0 };
 	float dL_dpixel[C];
-	float dL_dpixel_depth;
-	float dL_dpixel_trans;
+	// float dL_dpixel_depth;
+	// float dL_dpixel_trans;
 	float accum_depth_rec = 0;
 	if (inside){
 		for (int i = 0; i < C; i++)
 			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
-		dL_dpixel_depth = dL_dpixel_depths[pix_id];
-		dL_dpixel_trans = dL_dpixel_transs[pix_id];
+		// dL_dpixel_depth = dL_dpixel_depths[pix_id];
+		// dL_dpixel_trans = dL_dpixel_transs[pix_id];
 	}
 
 	float last_alpha = 0;
@@ -652,8 +652,6 @@ renderCUDA(
 			atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely * ddely_dy);
 			// Update gradients w.r.t. 2D mean position of the Gaussian
 			if(return_2d_grad){
-				// atomicAdd(&dL_dmean2D[global_id].z, fabs(dL_dG * dG_ddelx * ddelx_dx));
-				// atomicAdd(&dL_dmean2D[global_id].w, fabs(dL_dG * dG_ddely * ddely_dy));
 				atomicAdd(&dL_dmean2D_sq[global_id], sqrt(square(dL_dG * dG_ddelx * ddelx_dx) + square(dL_dG * dG_ddely * ddely_dy)));
 				atomicAdd(&dL_dmean2D_N[global_id], 1.0);
 			}

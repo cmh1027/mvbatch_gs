@@ -151,7 +151,7 @@ RasterizeGaussiansCUDA(
 	return std::make_tuple(rendered, batch_rendered, out_color, out_depth, out_trans, radii, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask, measureTime, preprocessTime, renderTime);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, float, float>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, float, float, float>
 RasterizeGaussiansBackwardCUDA(
  	const torch::Tensor& background,
 	const torch::Tensor& means3D,
@@ -225,7 +225,7 @@ RasterizeGaussiansBackwardCUDA(
 
 	torch::Tensor denom = torch::zeros({P, 1}, means3D.options());
 
-	double preprocessTime, renderTime;
+	double preprocessTime, renderTime, scatterAddTime;
 	if(BR != 0)
 	{  
 		auto returned = CudaRasterizer::Rasterizer::backward(P, degree, M, B, S, R, BR,
@@ -276,6 +276,8 @@ RasterizeGaussiansBackwardCUDA(
 
 		point_idx = point_idx.to(torch::kInt64);
 
+		if(time_check) cudaDeviceSynchronize();
+		clock_t start = clock();
 		dL_dmeans3D_sum.scatter_add_(0, point_idx.expand({-1, 3}), dL_dmeans3D);
 		dL_dscales_sum.scatter_add_(0, point_idx.expand({-1, 3}), dL_dscales);
 		dL_drotations_sum.scatter_add_(0, point_idx.expand({-1, 4}), dL_drotations);
@@ -299,8 +301,10 @@ RasterizeGaussiansBackwardCUDA(
 				dL_dmeans2D_sum = torch::cat({dL_dmeans2D_noabs.norm(2, -1, true), dL_dmeans2D_abs.norm(2, -1, true)}, -1);
 			}
 		}
+		if(time_check) cudaDeviceSynchronize(); \
+		scatterAddTime = (double)(clock() - start) / CLOCKS_PER_SEC; 
 	}
-  	return std::make_tuple(dL_dmeans2D_sum, dL_dopacity, dL_dmeans3D_sum, dL_dsh_sum, dL_dscales_sum, dL_drotations_sum, denom, preprocessTime, renderTime);
+  	return std::make_tuple(dL_dmeans2D_sum, dL_dopacity, dL_dmeans3D_sum, dL_dsh_sum, dL_dscales_sum, dL_drotations_sum, denom, preprocessTime, renderTime, scatterAddTime);
 }
 
 torch::Tensor markVisible(

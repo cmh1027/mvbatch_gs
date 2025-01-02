@@ -117,6 +117,7 @@ class OptimizationParams(ParamGroup):
         self.prune_until = 25000
         self.max_points = 6000000
         self.denom = False
+        self.densify_until_iter_3dgs = 25_000
         
         ### 3dgs-mcmc ###
         self.add_ratio = 0.05
@@ -136,13 +137,13 @@ class OptimizationParams(ParamGroup):
         self.predictable_growth = False
         self.predictable_growth_degree = 5.0
         self.predictable_growth_degree_3dgs = 5.0
-        self.predictable_growth_degree_mcmc = 2.0
+        self.predictable_growth_degree_mcmc = 5.0
 
         self.split_original = False
         self.time_check = False
         self.ssim_no_normalize = False
-        self.viewpoint_replacement = False
-        self.viewpoint_weight = False
+        self.viewpoint_decrease = False
+        self.viewpoint_decrease_until = 30000
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

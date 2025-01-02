@@ -153,11 +153,13 @@ class _RasterizeGaussians(torch.autograd.Function):
             grad_rotations, 
             denom,
             preprocessTime,
-            renderTime
+            renderTime,
+            scatterAddTime
         ) = _C.rasterize_gaussians_backward(*args)
         raster_settings.log_buffer["denom"] = denom
         raster_settings.log_buffer["backward_preprocessTime"] = preprocessTime
         raster_settings.log_buffer["backward_renderTime"] = renderTime
+        raster_settings.log_buffer["backward_scatterAddTime"] = scatterAddTime
         grads = (
             grad_means3D,
             grad_means2D,

@@ -15,7 +15,8 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 
-def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, mask=None, low_pass=0.3, grad_sep=False, time_check=False, return_2d_grad=False, batch_map=None):
+def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, mask=None, low_pass=0.3, grad_sep=False, 
+           time_check=False, return_2d_grad=False, batch_map=None):
     """
     Render the scene. 
     

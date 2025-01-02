@@ -97,14 +97,12 @@ class Scene:
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]
 
-    def sample_cameras(self, idx, N=2, replacement=False, coef=0.0):
-        if not replacement:
-            indices = torch.randperm(len(self.getTrainCameras()), device=torch.device('cuda'))
-            indices = indices[indices != idx][:N-1]
-            selected = torch.cat([torch.tensor([idx], device=torch.device('cuda')), indices])
+    def sample_cameras(self, idx, N=2, add_viewpoint=None):
+        if add_viewpoint == 0:
+            selected = torch.tensor([idx] * N, device=torch.device('cuda'))
         else:
-            weight = torch.ones(len(self.getTrainCameras()), device=torch.device('cuda'))
-            weight[idx] += coef * len(self.getTrainCameras()) / N
-            indices = torch.multinomial(weight, N-1, replacement=True)
-            selected = torch.cat([torch.tensor([idx], device=torch.device('cuda')), indices])
+            assert N > add_viewpoint
+            indices = torch.randperm(len(self.getTrainCameras()), device=torch.device('cuda'))
+            indices = indices[indices != idx][:add_viewpoint]
+            selected = torch.cat([torch.tensor([idx] * (N - add_viewpoint), device=torch.device('cuda')), indices])
         return selected.sort().values

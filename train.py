@@ -35,7 +35,6 @@ from metrics import evaluate
 from datetime import timedelta
 import time
 from diff_gaussian_rasterization import make_category_mask
-import kornia
 
 def training(dataset, opt, pipe, args):
 	saving_iterations = args.save_iterations
@@ -52,7 +51,7 @@ def training(dataset, opt, pipe, args):
 
 	if opt.gs_type == "original":
 		dataset.init_scale = 1
-		opt.densify_until_iter = 25000
+		opt.densify_until_iter = opt.densify_until_iter_3dgs
 		opt.predictable_growth_degree = opt.predictable_growth_degree_3dgs
 		if dataset.cap_max_gs != -1:
 			dataset.cap_max = dataset.cap_max_gs
@@ -101,11 +100,16 @@ def training(dataset, opt, pipe, args):
 	num_pts_func = compute_pts_func(dataset.cap_max, gaussians.num_pts, (opt.densify_until_iter - from_iter) // opt.densification_interval, opt.predictable_growth_degree)
 
 	start_time = time.time()
+	add_viewpoint = opt.batch_size - 1
 	for iteration in range(first_iter, opt.iterations + 1): 
 		gt_images = []
 		if iteration == forced_exit:
 			print("FORCED EXIT")
-			break   
+			break
+		if opt.batch_size > 1 and opt.viewpoint_decrease and iteration % (opt.viewpoint_decrease_until // (opt.batch_size-1)) == 0 and add_viewpoint >= 1: 
+			print(f"Additional viewpoint : {add_viewpoint} -> {add_viewpoint-1}")
+			add_viewpoint = add_viewpoint-1
+			
 		lrs = gaussians.update_learning_rate(iteration, opt.schedule_all)
 
 		# Every 1000 its we increase the levels of SH up to a maximum degree
@@ -121,11 +125,7 @@ def training(dataset, opt, pipe, args):
 		if opt.batch_size == 1:
 			cam_idxs = torch.tensor([cam_idx], device=torch.device('cuda'))
 		else:
-			if opt.viewpoint_weight:
-				coef = iteration/opt.iterations
-			else:
-				coef = 0.0
-			cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, replacement=opt.viewpoint_replacement, coef=coef)
+			cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, add_viewpoint=add_viewpoint)
 
 		cam_idxs.clamp_(max=len(viewpoints)-1)
 		unique_cam_idxs = cam_idxs.unique()
@@ -173,7 +173,6 @@ def training(dataset, opt, pipe, args):
 			collage_gt = torch.gather(gt_images, 0, collage_mask.unsqueeze(0)).squeeze(0)
 			Ll = pixel_loss(image, collage_gt, ltype=opt.loss_type)
 			loss = (1.0 - opt.lambda_dssim) * Ll
-
 			if opt.lambda_dssim > 0:
 				collage_mask_binary = torch.zeros_like(collage_mask[0:1]).repeat(len(unique_cams), 1, 1).float()
 				collage_mask_binary.scatter_add_(0, collage_mask[0:1], torch.ones_like(collage_mask_binary)) # (B, H, W)
@@ -185,7 +184,13 @@ def training(dataset, opt, pipe, args):
 			Ll = pixel_loss(image, gt_image, ltype=opt.loss_type)
 			loss = (1.0 - opt.lambda_dssim) * Ll
 			if opt.lambda_dssim > 0:
-				loss += opt.lambda_dssim * (1 - ssim(image, gt_image)).mean()
+				if opt.time_check:
+					torch.cuda.synchronize()
+					start = time.time()
+				loss += opt.lambda_dssim * (1 - ssim(image, gt_image)).sum(dim=0).mean() 
+				if opt.time_check:
+					torch.cuda.synchronize()
+					ssim_time = time.time() - start
 			
 		#########################
 		if not opt.evaluate_time:
@@ -209,15 +214,16 @@ def training(dataset, opt, pipe, args):
 			torch.cuda.synchronize()
 			backward_time = time.time() - start
 
-
-		if opt.time_check and not opt.evaluate_time and iteration % 10 == 0:
+		if opt.time_check and iteration % 10 == 0:
 			tb_writer.add_scalar(f'time/forward/measure', log_buffer["forward_measureTime"], iteration)
 			tb_writer.add_scalar(f'time/forward/preprocess', log_buffer["forward_preprocessTime"], iteration)
 			tb_writer.add_scalar(f'time/forward/render', log_buffer["forward_renderTime"], iteration)
 			tb_writer.add_scalar(f'time/backward/preprocess', log_buffer["backward_preprocessTime"], iteration)
 			tb_writer.add_scalar(f'time/backward/render', log_buffer["backward_renderTime"], iteration)
+			tb_writer.add_scalar(f'time/backward/scatterAdd', log_buffer["backward_scatterAddTime"], iteration)
 			tb_writer.add_scalar(f'time/total/forward', forward_time, iteration)
 			tb_writer.add_scalar(f'time/total/backward', backward_time, iteration)
+			tb_writer.add_scalar(f'time/ssim', ssim_time, iteration)
 
 
 		with torch.no_grad():
@@ -229,8 +235,6 @@ def training(dataset, opt, pipe, args):
 					"num_pts": len(gaussians._xyz),
 					"batch": opt.batch_size
 				}
-				if opt.gs_type == "mcmc":
-					postfix["o_reg"] = opt.opacity_reg
 				progress_bar.set_postfix(postfix)
 				progress_bar.update(10)
 			if iteration == opt.iterations:
