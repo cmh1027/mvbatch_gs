@@ -138,18 +138,8 @@ def training(dataset, opt, pipe, args):
 
 		bg = torch.rand((3), device="cuda") if opt.random_background else background
 
-		if opt.grid_size == 1:
-			pmask = torch.sort(torch.rand(partial_height * partial_width, opt.mask_height * opt.mask_width, device=torch.device('cuda'))).indices.to(torch.int32)
-		else:
-			assert opt.mask_height % opt.grid_size == 0
-			assert opt.mask_width % opt.grid_size == 0
-			x = torch.arange(opt.mask_height * opt.mask_width, device=torch.device('cuda')).reshape(opt.mask_height, opt.mask_width)
-			x = x[::opt.grid_size, ::opt.grid_size].flatten()
-			x = x[torch.rand(partial_height * partial_width, x.shape[0], device=torch.device('cuda')).sort(dim=-1).indices]
-			x = torch.stack([x+i for i in range(opt.grid_size)], dim=-1)
-			x = torch.stack([x+i*opt.mask_width for i in range(opt.grid_size)], dim=-1)
-			pmask = x.reshape(partial_height * partial_width, -1).to(torch.int32)
-			
+		pmask = torch.sort(torch.rand(partial_height * partial_width, opt.mask_height * opt.mask_width, device=torch.device('cuda'))).indices.to(torch.int32)
+
 		kwargs = {
 			"mask" : pmask,
 			"grad_sep": opt.grad_sep,
@@ -163,12 +153,11 @@ def training(dataset, opt, pipe, args):
 			torch.cuda.synchronize()
 			forward_time = time.time() - start
 
-		(image, depth, residual_trans, viewspace_point_tensor, visibility_filter, radii, log_buffer) = (
+		(image, depth, residual_trans, viewspace_point_tensor, radii, log_buffer) = (
 			render_pkg["render"][:3, ...], 
 			render_pkg["depth"],
 			render_pkg["residual_trans"],
 			render_pkg["viewspace_points"], 
-			render_pkg["visibility_filter"], 
 			render_pkg["radii"],
 			render_pkg["log_buffer"]
 		)
@@ -217,13 +206,9 @@ def training(dataset, opt, pipe, args):
 			backward_time = time.time() - start
 			
 
-		if not opt.evaluate_time and iteration % 10 == 0:
+		if opt.time_check and iteration % 10 == 0:
 			tb_writer.add_scalar(f'time/forward/measure', log_buffer["forward_measureTime"], iteration)
-			tb_writer.add_scalar(f'time/forward/saveIndex', log_buffer["forward_saveIndexTime"], iteration)
 			tb_writer.add_scalar(f'time/forward/preprocess', log_buffer["forward_preprocessTime"], iteration)
-			tb_writer.add_scalar(f'time/forward/dup', log_buffer["forward_dupTime"], iteration)
-			tb_writer.add_scalar(f'time/forward/sort', log_buffer["forward_sortTime"], iteration)
-			tb_writer.add_scalar(f'time/forward/identify', log_buffer["forward_identifyTime"], iteration)
 			tb_writer.add_scalar(f'time/forward/render', log_buffer["forward_renderTime"], iteration)
 			tb_writer.add_scalar(f'time/backward/preprocess', log_buffer["backward_preprocessTime"], iteration)
 			tb_writer.add_scalar(f'time/backward/render', log_buffer["backward_renderTime"], iteration)
@@ -254,17 +239,14 @@ def training(dataset, opt, pipe, args):
 
 			if iteration < opt.densify_until_iter:
 				if opt.gs_type == "original":
-					mask = visibility_filter 
-					gaussians.max_radii2D[mask] = torch.max(gaussians.max_radii2D[mask], radii[mask])
+					# radii : (B, N)
+					max_radii = radii.max(dim=0).values
+					mask = max_radii > 0
+					
+					gaussians.max_radii2D[mask] = torch.max(gaussians.max_radii2D[mask], max_radii[mask])
 					vs_clone = viewspace_point_tensor.grad[..., 0:1]
-					if opt.split_original:
-						vs_split = viewspace_point_tensor.grad[..., 0:1]
-					else:
-						vs_split = viewspace_point_tensor.grad[..., 1:2]
-					if opt.denom:
-						denom = log_buffer['denom']/len(cams)
-					else:
-						denom = visibility_filter[..., None]
+					vs_split = viewspace_point_tensor.grad[..., 1:2]
+					denom = (radii > 0).sum(dim=0)[..., None] / len(cams)
 					gaussians.add_densification_stats(vs_clone, vs_split, mask, denom)
 
 				if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:

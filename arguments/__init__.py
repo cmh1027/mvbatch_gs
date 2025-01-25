@@ -114,7 +114,6 @@ class OptimizationParams(ParamGroup):
         self.prune_interval = 100
         self.prune_until = 25000
         self.max_points = 6000000
-        self.denom = False
         
         ### 3dgs-mcmc ###
         self.add_ratio = 0.05
@@ -128,7 +127,6 @@ class OptimizationParams(ParamGroup):
         self.batch_until = -1
         self.mask_height = 32
         self.mask_width = 32
-        self.grid_size = 1
 
         self.only_psnr = False
         self.log_batch = False
@@ -142,7 +140,6 @@ class OptimizationParams(ParamGroup):
         self.predictable_growth_degree_3dgs = 5.0
         self.predictable_growth_degree_mcmc = 2.0
 
-        self.split_original = False
         self.time_check = False
         super().__init__(parser, "Optimization Parameters")
 

@@ -34,7 +34,7 @@ std::function<char*(size_t N)> resizeFunctional(torch::Tensor& t) {
     return lambda;
 }
 
-std::tuple<int, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, float, float, float, float, float, float, float>
+std::tuple<int, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, float, float, float>
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
@@ -100,7 +100,7 @@ RasterizeGaussiansCUDA(
 
 	int rendered = 0;
 	int batch_rendered = 0;
-	double measureTime, saveIndexTime, preprocessTime, dupTime, sortTime, identifyTime, renderTime;
+	double measureTime, preprocessTime, renderTime;
 	if(P != 0)
 	{
 		int M = 0;
@@ -142,17 +142,13 @@ RasterizeGaussiansCUDA(
 		rendered = std::get<0>(returned);
 		batch_rendered = std::get<1>(returned);
 		measureTime = std::get<2>(returned);
-		saveIndexTime = std::get<3>(returned);
-		preprocessTime = std::get<4>(returned);
-		dupTime = std::get<5>(returned);
-		sortTime = std::get<6>(returned);
-		identifyTime = std::get<7>(returned);
-		renderTime = std::get<8>(returned);
+		preprocessTime = std::get<3>(returned);
+		renderTime = std::get<4>(returned);
 	}
-	return std::make_tuple(rendered, batch_rendered, out_color, out_depth, out_trans, radii, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask, measureTime, saveIndexTime, preprocessTime, dupTime, sortTime, identifyTime, renderTime);
+	return std::make_tuple(rendered, batch_rendered, out_color, out_depth, out_trans, radii, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask, measureTime, preprocessTime, renderTime);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, float, float>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, float, float>
 RasterizeGaussiansBackwardCUDA(
  	const torch::Tensor& background,
 	const torch::Tensor& means3D,
@@ -197,19 +193,13 @@ RasterizeGaussiansBackwardCUDA(
 	}
 
 
-	torch::Tensor dL_dmeans2D = torch::zeros({BR, 4}, means3D.options());
+	torch::Tensor dL_dmeans2D = torch::zeros({BR, 2}, means3D.options());
 	torch::Tensor dL_dmeans2D_sq = torch::zeros({BR, 1}, means3D.options());
-	torch::Tensor dL_dmeans2D_N = torch::full({BR, 1}, 1e-6, means3D.options());
 	
 	torch::Tensor dL_dcolors = torch::zeros({BR, NUM_CHANNELS}, means3D.options());
 	torch::Tensor dL_ddepths = torch::zeros({BR, 1}, means3D.options());
 	torch::Tensor dL_dconic = torch::zeros({BR, 2, 2}, means3D.options());
 	torch::Tensor dL_dcov3D = torch::zeros({BR, 6}, means3D.options());
-
-	// torch::Tensor dL_dmeans3D = torch::zeros({P, 3}, means3D.options());
-	// torch::Tensor dL_dscales = torch::zeros({P, 3}, means3D.options());
-	// torch::Tensor dL_drotations = torch::zeros({P, 4}, means3D.options());
-	// torch::Tensor dL_dsh = torch::zeros({P, M, 3}, means3D.options());
 
 	torch::Tensor dL_dopacity = torch::zeros({P, 1}, means3D.options());
 	torch::Tensor point_idx = torch::zeros({BR, 1}, means3D.options().dtype(torch::kInt32));
@@ -224,9 +214,6 @@ RasterizeGaussiansBackwardCUDA(
 	torch::Tensor dL_dscales_sum = torch::zeros({P, 3}, means3D.options());
 	torch::Tensor dL_drotations_sum = torch::zeros({P, 4}, means3D.options());
 	torch::Tensor dL_dsh_sum = torch::zeros({P, M*3}, means3D.options());
-	
-
-	torch::Tensor denom = torch::zeros({P, 1}, means3D.options());
 
 	double preprocessTime, renderTime;
 	if(BR != 0)
@@ -256,7 +243,6 @@ RasterizeGaussiansBackwardCUDA(
 		dL_dout_trans.contiguous().data<float>(),
 		dL_dmeans2D.contiguous().data<float>(),
 		dL_dmeans2D_sq.contiguous().data<float>(),
-		dL_dmeans2D_N.contiguous().data<float>(),
 		dL_dconic.contiguous().data<float>(),  
 		dL_dopacity.contiguous().data<float>(),
 		dL_dcolors.contiguous().data<float>(),
@@ -283,26 +269,23 @@ RasterizeGaussiansBackwardCUDA(
 		dL_dsh_sum.scatter_add_(0, point_idx.expand({-1, M*3}), dL_dsh);
 		dL_dsh_sum = dL_dsh_sum.reshape({P, M, 3});
 
-		denom.scatter_add_(0, point_idx.expand({-1, 1}),torch::ones_like(dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 1)})));
-
 		if(grad_sep){
-			torch::Tensor dL_dmeans2D_noabs = torch::zeros({P, 1}, means3D.options());
-			torch::Tensor dL_dmeans2D_abs = torch::zeros({P, 1}, means3D.options());
-			dL_dmeans2D_noabs.scatter_add_(0, point_idx.expand({-1, 1}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}).norm(2, -1, true));
-			dL_dmeans2D_abs.scatter_add_(0, point_idx.expand({-1, 1}), dL_dmeans2D_sq);
-			dL_dmeans2D_sum = torch::cat({dL_dmeans2D_noabs,dL_dmeans2D_abs}, -1);
+			torch::Tensor dL_dmeans2D_clone = torch::zeros({P, 1}, means3D.options());
+			torch::Tensor dL_dmeans2D_split = torch::zeros({P, 1}, means3D.options());
+			dL_dmeans2D_clone.scatter_add_(0, point_idx.expand({-1, 1}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}).norm(2, -1, true));
+			dL_dmeans2D_split.scatter_add_(0, point_idx.expand({-1, 1}), dL_dmeans2D_sq);
+			dL_dmeans2D_sum = torch::cat({dL_dmeans2D_clone,dL_dmeans2D_split}, -1);
 		}
 		else{
-			torch::Tensor dL_dmeans2D_noabs = torch::zeros({P, 2}, means3D.options());
-			torch::Tensor dL_dmeans2D_abs = torch::zeros({P, 2}, means3D.options());
-			dL_dmeans2D_noabs.scatter_add_(0, point_idx.expand({-1, 2}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}));
-			dL_dmeans2D_abs.scatter_add_(0, point_idx.expand({-1, 2}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}));
-			dL_dmeans2D_sum = torch::cat({dL_dmeans2D_noabs.norm(2, -1, true), dL_dmeans2D_abs.norm(2, -1, true)}, -1);
+			torch::Tensor dL_dmeans2D_clone = torch::zeros({P, 2}, means3D.options());
+			torch::Tensor dL_dmeans2D_split = torch::zeros({P, 2}, means3D.options());
+			dL_dmeans2D_clone.scatter_add_(0, point_idx.expand({-1, 2}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}));
+			dL_dmeans2D_split.scatter_add_(0, point_idx.expand({-1, 2}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}));
+			dL_dmeans2D_sum = torch::cat({dL_dmeans2D_clone.norm(2, -1, true), dL_dmeans2D_split.norm(2, -1, true)}, -1);
 		}
 	}
 	ERROR_CHECK
-  	return std::make_tuple(dL_dmeans2D_sum, dL_dopacity, dL_dmeans3D_sum, dL_dsh_sum, dL_dscales_sum, dL_drotations_sum, denom, preprocessTime, renderTime);
-	// return std::make_tuple(dL_dmeans2D_sum, dL_dopacity, dL_dmeans3D, dL_dsh, dL_dscales, dL_drotations_sum, denom, preprocessTime, renderTime);
+  	return std::make_tuple(dL_dmeans2D_sum, dL_dopacity, dL_dmeans3D_sum, dL_dsh_sum, dL_dscales_sum, dL_drotations_sum, preprocessTime, renderTime);
 }
 
 torch::Tensor markVisible(

@@ -86,29 +86,20 @@ class _RasterizeGaussians(torch.autograd.Function):
             imgBuffer, 
             mask,
             measureTime, 
-            saveIndexTime,
             preprocessTime, 
-            dupTime, 
-            sortTime, 
-            identifyTime, 
             renderTime
         ) = _C.rasterize_gaussians(*args)
 
         raster_settings.log_buffer["R"] = num_rendered
         raster_settings.log_buffer["BR"] = batch_num_rendered
         raster_settings.log_buffer["forward_measureTime"] = measureTime
-        raster_settings.log_buffer["forward_saveIndexTime"] = saveIndexTime
         raster_settings.log_buffer["forward_preprocessTime"] = preprocessTime
-        raster_settings.log_buffer["forward_dupTime"] = dupTime
-        raster_settings.log_buffer["forward_sortTime"] = sortTime
-        raster_settings.log_buffer["forward_identifyTime"] = identifyTime
         raster_settings.log_buffer["forward_renderTime"] = renderTime
         # Keep relevant tensors for backward
         ctx.raster_settings = raster_settings
         ctx.num_rendered = num_rendered
         ctx.batch_num_rendered = batch_num_rendered
         ctx.save_for_backward(means3D, scales, rotations, radii, sh, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask)
-        radii = radii.max(dim=0).values # (B, N) => (N,)
         return rendered_color, radii, rendered_depth, residual_trans
 
     @staticmethod
@@ -156,11 +147,9 @@ class _RasterizeGaussians(torch.autograd.Function):
             grad_sh, 
             grad_scales, 
             grad_rotations, 
-            denom,
             preprocessTime,
             renderTime
         ) = _C.rasterize_gaussians_backward(*args)
-        raster_settings.log_buffer["denom"] = denom
         raster_settings.log_buffer["backward_preprocessTime"] = preprocessTime
         raster_settings.log_buffer["backward_renderTime"] = renderTime
         grads = (

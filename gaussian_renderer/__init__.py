@@ -83,7 +83,6 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
         rotations = rotations)
     return_dict =  {"render": rendered_image,
                     "viewspace_points": screenspace_points,
-                    "visibility_filter" : radii > 0,
                     "radii": radii,
                     "depth": depth,
                     "residual_trans": residual_trans,
