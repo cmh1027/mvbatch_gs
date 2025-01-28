@@ -175,8 +175,7 @@ __global__ void computeCov2DCUDA(int BR, int P,
 	float* dL_dcov,
 	const int* mask,
 	const int* point_index,
-	const int* point_batch_index,
-	const float low_pass
+	const int* point_batch_index
 )
 {
 	auto idx = cg::this_grid().thread_rank();
@@ -228,9 +227,9 @@ __global__ void computeCov2DCUDA(int BR, int P,
 	glm::mat3 cov2D = glm::transpose(T) * glm::transpose(Vrk) * T;
 
 	// Use helper variables for 2D covariance entries. More compact.
-	float a = cov2D[0][0] += low_pass;
+	float a = cov2D[0][0] += 0.3f;
 	float b = cov2D[0][1];
-	float c = cov2D[1][1] += low_pass;
+	float c = cov2D[1][1] += 0.3f;
 
 	float denom = a * c - b * b;
 	float dL_da = 0, dL_db = 0, dL_dc = 0;
@@ -723,8 +722,7 @@ void BACKWARD::preprocess(
 	glm::vec4* dL_drot,
 	const int* mask,
 	const int* point_index,
-	const int* point_batch_index,
-	const float low_pass
+	const int* point_batch_index
 )
 {
 	// Propagate gradients for the path of 2D conic matrix computation. 
@@ -746,8 +744,7 @@ void BACKWARD::preprocess(
 		dL_dcov3D,
 		mask,
 		point_index,
-		point_batch_index,
-		low_pass
+		point_batch_index
 	);
 	ERROR_CHECK
 

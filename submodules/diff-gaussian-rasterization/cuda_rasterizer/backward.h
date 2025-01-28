@@ -74,8 +74,7 @@ namespace BACKWARD
 		glm::vec4* dL_drot,
 		const int* mask,
 		const int* point_index,
-		const int* point_batch_index,
-		const float low_pass
+		const int* point_batch_index
 	);
 }
 

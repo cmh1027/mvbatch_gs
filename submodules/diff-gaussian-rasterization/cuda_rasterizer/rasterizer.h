@@ -53,7 +53,6 @@ namespace CudaRasterizer
 			float* out_trans,
 			int* radii,
 			const int* mask,
-			const float low_pass,
 			const bool time_check,
 			bool debug = false);
 
@@ -94,7 +93,6 @@ namespace CudaRasterizer
 			float* dL_drot,
 			const int* mask,
 			int* point_idx,
-			const float low_pass,
 			const bool time_check,
 			bool debug);
 	};

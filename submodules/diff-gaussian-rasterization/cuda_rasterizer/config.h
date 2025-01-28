@@ -53,7 +53,7 @@
 		} \
 	}
 
-#define DEBUG
+// #define DEBUG
 #ifdef DEBUG
     #define TIMEPRINT(fmt, ...) printf(fmt, ##__VA_ARGS__);
     #define PRINTLINE printf("End %s %d\n", __FILE__, __LINE__);
@@ -76,8 +76,3 @@
     #define PRINTLINE ;
     #define ERROR_CHECK ;
 #endif
-
-#define atomicAddGLM(addr, value) \
-		atomicAdd(&(addr->x), value.x); \
-		atomicAdd(&(addr->y), value.y); \
-		atomicAdd(&(addr->z), value.z); 

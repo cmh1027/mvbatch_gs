@@ -100,3 +100,44 @@ void UTILS::MakeCategoryMask(
 	make_category_mask<<<grid, block>>>(mask, H, W, B, output_mask);
     ERROR_CHECK
 }
+
+__global__ void extract_visible_points(
+    int P, int B, float boundary,
+	const float* orig_points,
+	const float* viewmatrix,
+	const float* projmatrix,
+    int* visibility // (B, P)
+)
+{
+	auto idx = cg::this_grid().thread_rank();
+
+	int batch_idx = idx / P;
+	if (batch_idx >= B || idx >= B * P) return;
+	idx = idx % P;
+
+	/* batch offset */
+	viewmatrix += batch_idx * 16;
+	projmatrix += batch_idx * 16;
+    visibility += batch_idx * P;
+
+	// Perform near culling, quit if outside.
+	float3 p_view;
+	if (in_frustum_NDC(idx, orig_points, viewmatrix, projmatrix, p_view, boundary)){
+        visibility[idx] = 1;
+    }
+    else{
+        visibility[idx] = 0;
+    }
+}
+
+void UTILS::ExtractVisiblePoints(
+    int P, int B, float boundary,
+	const float* orig_points,
+	const float* viewmatrix,
+	const float* projmatrix,
+    int* visibility
+)
+{
+	extract_visible_points<< <(B * P + 255) / 256, 256 >> >(P, B, boundary, orig_points, viewmatrix, projmatrix, visibility);
+    ERROR_CHECK
+}

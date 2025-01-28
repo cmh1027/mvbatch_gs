@@ -318,7 +318,6 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 	float* out_trans,
 	int* radii,
 	const int* mask,
-	const float low_pass,
 	const bool time_check,
 	bool debug)
 {
@@ -344,7 +343,6 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		scale_modifier,
 		(glm::vec4*)rotations,
 		viewmatrix, projmatrix,
-		(glm::vec3*)cam_pos,
 		width, height,
 		focal_x, 
 		focal_y,
@@ -353,8 +351,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		tile_grid,
 		mask,
 		cacheState.batch_num_rendered,
-		cacheState.batch_rendered_check,
-		low_pass
+		cacheState.batch_rendered_check
 	), time_check, start, measureTime)
 
 
@@ -402,8 +399,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		geomState.tiles_touched,
 		mask,
 		geomState.point_index,
-		geomState.point_batch_index,
-		low_pass
+		geomState.point_batch_index
 	), time_check, start, preprocessTime)
 
 
@@ -522,7 +518,6 @@ std::tuple<float, float> CudaRasterizer::Rasterizer::backward(
 	float* dL_drot,
 	const int* mask,
 	int* point_idx,
-	const float low_pass,
 	const bool time_check,
 	bool debug)
 {
@@ -601,8 +596,7 @@ std::tuple<float, float> CudaRasterizer::Rasterizer::backward(
 		(glm::vec4*)dL_drot,
 		mask,
 		geomState.point_index,
-		geomState.point_batch_index,
-		low_pass
+		geomState.point_batch_index
 	), time_check, start, preprocessTime)
 	ERROR_CHECK
 

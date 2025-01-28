@@ -18,4 +18,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("mark_visible", &markVisible);
   m.def("compute_relocation", &ComputeRelocationCUDA);
   m.def("make_category_mask", &MakeCategoryMaskCUDA);
+  m.def("extract_visible_points", &ExtractVisiblePointsCUDA);
 }

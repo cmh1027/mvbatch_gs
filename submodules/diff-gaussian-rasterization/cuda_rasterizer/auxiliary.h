@@ -157,6 +157,27 @@ __forceinline__ __device__ bool in_frustum(int idx,
 	return true;
 }
 
+__forceinline__ __device__ bool in_frustum_NDC(int idx,
+	const float* orig_points,
+	const float* viewmatrix,
+	const float* projmatrix,
+	float3& p_view,
+	const float bd)
+{
+	float3 p_orig = { orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2] };
+	// Bring points to screen space
+	float4 p_hom = transformPoint4x4(p_orig, projmatrix);
+	float p_w = 1.0f / (p_hom.w + 0.0000001f);
+	float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
+
+
+	if (p_view.z <= 0.2f || p_proj.x < -bd || p_proj.x > bd || p_proj.y < -bd || p_proj.y > bd)
+	{
+		return false;
+	}
+	return true;
+}
+
 
 #define CHECK_CUDA(A, debug) \
 A; if(debug) { \

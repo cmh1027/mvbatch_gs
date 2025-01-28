@@ -52,7 +52,6 @@ RasterizeGaussiansCUDA(
 	const int degree,
 	const torch::Tensor& campos,
 	torch::Tensor& mask,
-	const float low_pass,
 	const bool time_check,
 	const bool debug)
 {
@@ -135,7 +134,6 @@ RasterizeGaussiansCUDA(
 			out_trans.contiguous().data<float>(),
 			radii.contiguous().data<int>(),
 			mask.contiguous().data<int>(),
-			low_pass,
 			time_check,
 			debug
 		);
@@ -173,7 +171,6 @@ RasterizeGaussiansBackwardCUDA(
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
 	torch::Tensor& mask,
-	const float low_pass,
 	const int grad_sep,
 	const bool time_check,
 	const bool debug)
@@ -254,7 +251,6 @@ RasterizeGaussiansBackwardCUDA(
 		dL_drotations.contiguous().data<float>(),
 		mask.contiguous().data<int>(),
 		point_idx.contiguous().data<int>(),
-		low_pass,
 		time_check,
 		debug);
 	
@@ -369,8 +365,8 @@ torch::Tensor MakeCategoryMaskCUDA(
 	int H, int W, int B
 )
 {
-	auto float_opts = mask.options().dtype(torch::kInt32);
-	torch::Tensor category_mask = torch::full({H, W}, 0.0, float_opts);
+	auto int_ops = mask.options().dtype(torch::kInt32);
+	torch::Tensor category_mask = torch::full({H, W}, 0.0, int_ops);
 
 
 	UTILS::MakeCategoryMask(
@@ -381,4 +377,28 @@ torch::Tensor MakeCategoryMaskCUDA(
 
 
 	return category_mask;
+}
+
+torch::Tensor ExtractVisiblePointsCUDA(
+	const torch::Tensor& orig_points,
+	const torch::Tensor& viewmatrix,
+	const torch::Tensor& projmatrix,
+	float boundary
+)
+{
+	const int P = orig_points.size(0);
+	const int B = viewmatrix.size(0);
+
+	auto int_ops = orig_points.options().dtype(torch::kInt32);
+	torch::Tensor visibility = torch::full({B, P}, 0.0, int_ops);
+
+	UTILS::ExtractVisiblePoints(
+		P, B, boundary,
+		orig_points.contiguous().data<float>(), 
+		viewmatrix.contiguous().data<float>(), 
+		projmatrix.contiguous().data<float>(), 
+		visibility.contiguous().data<int>()
+	);
+
+	return visibility;
 }

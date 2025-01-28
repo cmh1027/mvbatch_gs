@@ -34,7 +34,7 @@ from render import render_sets
 from metrics import evaluate
 from datetime import timedelta
 import time
-from diff_gaussian_rasterization import make_category_mask
+from diff_gaussian_rasterization import make_category_mask, extract_visible_points
 from math import ceil
 
 def training(dataset, opt, pipe, args):
@@ -105,6 +105,12 @@ def training(dataset, opt, pipe, args):
 	num_pts_func = compute_pts_func(opt.cap_max, gaussians.num_pts, (opt.densify_until_iter - from_iter) // opt.densification_interval, predictable_growth_degree)
 
 	start_time = time.time()
+
+	# for bd in range(1, 11):
+	# 	vis_mask = extract_visible_points(gaussians.get_xyz, scene.getAllViewMatrix(), scene.getAllProjMatrix(), boundary=bd/10)
+	# 	print(bd/10, vis_mask.sum(dim=1)[:5])
+	# breakpoint()
+
 	for iteration in range(first_iter, opt.iterations + 1): 
 		gt_images = []
 		if iteration == forced_exit:
@@ -229,7 +235,7 @@ def training(dataset, opt, pipe, args):
 				progress_bar.close()
 			# Log and save
 			if not opt.evaluate_time:
-				training_report(opt, tb_writer, iteration, Ll, loss, testing_iterations, scene, render, (pipe, background), {"low_pass":args.low_pass})
+				training_report(opt, tb_writer, iteration, Ll, loss, testing_iterations, scene, render, (pipe, background))
 
 			if (iteration in saving_iterations and not opt.evaluate_time):
 				print("\n[ITER {}] Saving Gaussians".format(iteration))
@@ -449,7 +455,6 @@ if __name__ == "__main__":
 	parser.add_argument("--override_degree_3dgs", type=float)
 	parser.add_argument("--override_degree_mcmc", type=float)
 	parser.add_argument("--batch_size_decrease_interval", nargs="+", type=int)
-	parser.add_argument("--low_pass", default=0.3, type=float)
 	parser.add_argument("--benchmark", action="store_true")
 
 	args = parser.parse_args(sys.argv[1:])
@@ -479,7 +484,7 @@ if __name__ == "__main__":
 	training(lp.extract(args), op.extract(args), pp.extract(args), args)
 	render_iter = op.iterations if args.render_iter is None else args.render_iter
 	if args.forced_exit is None:
-		render_sets(lp.extract(args), render_iter, pp.extract(args), True, False, low_pass=args.low_pass)
+		render_sets(lp.extract(args), render_iter, pp.extract(args), True, False)
 		evaluate([args.model_path]) 
 
 

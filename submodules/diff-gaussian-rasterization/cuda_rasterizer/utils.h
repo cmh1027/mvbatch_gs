@@ -23,6 +23,14 @@ namespace UTILS
         int H, int W, int B,
         int* output_mask
     );
+
+    void ExtractVisiblePoints(
+        int P, int B, float boundary,
+        const float* orig_points,
+        const float* viewmatrix,
+        const float* projmatrix,
+        int* visibility
+    );
 }
 
 #endif

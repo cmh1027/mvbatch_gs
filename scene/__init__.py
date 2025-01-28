@@ -66,8 +66,8 @@ class Scene:
                 json.dump(json_cams, file)
 
         if shuffle:
-            random.shuffle(scene_info.train_cameras)  # Multi-res consistent random shuffling
-            random.shuffle(scene_info.test_cameras)  # Multi-res consistent random shuffling
+            random.shuffle(scene_info.train_cameras)  
+            random.shuffle(scene_info.test_cameras)  
 
         self.cameras_extent = scene_info.nerf_normalization["radius"]
 
@@ -97,8 +97,14 @@ class Scene:
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]
 
-    def sample_cameras(self, idx, N=2, strategy="max"):
+    def sample_cameras(self, idx, N=2):
         indices = torch.randperm(len(self.getTrainCameras()), device=torch.device('cuda'))
         indices = indices[indices != idx][:N-1]
         selected = torch.cat([torch.tensor([idx], device=torch.device('cuda')), indices])
         return selected
+
+    def getAllProjMatrix(self, scale=1.0):
+        return torch.stack([cam.full_proj_transform for cam in self.train_cameras[scale]])
+
+    def getAllViewMatrix(self, scale=1.0):
+        return torch.stack([cam.world_view_transform for cam in self.train_cameras[scale]])
