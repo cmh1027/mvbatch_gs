@@ -184,7 +184,7 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 
 	// Perform near culling, quit if outside.
 	float3 p_view;
-	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, p_view))
+	if (!in_frustum(idx, orig_points, viewmatrix, p_view))
 		return;
 
 	// Transform point by projecting
@@ -264,7 +264,7 @@ __global__ void preprocessCUDA(int BR, int P, int D, int M,
 
 	// Perform near culling, quit if outside.
 	float3 p_view;
-	if (!in_frustum(point_idx, orig_points, viewmatrix, projmatrix, p_view))
+	if (!in_frustum(point_idx, orig_points, viewmatrix, p_view))
 		return;
 
 	// Transform point by projecting

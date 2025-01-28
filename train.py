@@ -59,15 +59,13 @@ def training(dataset, opt, pipe, args):
 	if opt.gs_type == "original":
 		dataset.init_scale = 1
 		opt.densify_until_iter = 25000
-		opt.predictable_growth_degree = opt.predictable_growth_degree_3dgs
-		if dataset.cap_max_gs != -1:
-			dataset.cap_max = dataset.cap_max_gs
+		predictable_growth_degree = opt.predictable_growth_degree_3dgs
 	else:
-		opt.predictable_growth_degree = opt.predictable_growth_degree_mcmc
+		predictable_growth_degree = opt.predictable_growth_degree_mcmc
 
 	if opt.predictable_growth:
-		print(f"Predictable growth degree : {opt.predictable_growth_degree}")
-	if dataset.cap_max == -1:
+		print(f"Predictable growth degree : {predictable_growth_degree}")
+	if opt.cap_max == -1:
 		print("Please specify the maximum number of Gaussians using --cap_max.")
 		exit()
 
@@ -104,7 +102,7 @@ def training(dataset, opt, pipe, args):
 	print(f"tile size {opt.mask_height} x {opt.mask_width}")
 
 	from_iter = opt.densify_from_iter
-	num_pts_func = compute_pts_func(dataset.cap_max, gaussians.num_pts, (opt.densify_until_iter - from_iter) // opt.densification_interval, opt.predictable_growth_degree)
+	num_pts_func = compute_pts_func(opt.cap_max, gaussians.num_pts, (opt.densify_until_iter - from_iter) // opt.densification_interval, predictable_growth_degree)
 
 	start_time = time.time()
 	for iteration in range(first_iter, opt.iterations + 1): 
@@ -263,7 +261,7 @@ def training(dataset, opt, pipe, args):
 
 							if (iteration - opt.prune_interval) % opt.opacity_reset_interval == 0:
 								from_iter = iteration
-								num_pts_func = compute_pts_func(dataset.cap_max, gaussians.num_pts, (opt.densify_until_iter - from_iter) // opt.densification_interval, opt.predictable_growth_degree)
+								num_pts_func = compute_pts_func(opt.cap_max, gaussians.num_pts, (opt.densify_until_iter - from_iter) // opt.densification_interval, predictable_growth_degree)
 
 					elif opt.gs_type == "mcmc":
 						dead_mask = (gaussians.get_opacity <= opt.prune_threshold).squeeze(-1)
@@ -274,7 +272,7 @@ def training(dataset, opt, pipe, args):
 							add_ratio = next_pts_count / gaussians.num_pts - 1
 						else:
 							add_ratio = opt.add_ratio
-						gaussians.add_new_gs(opt, tb_writer, iteration=iteration, cap_max=args.cap_max, add_ratio=add_ratio)
+						gaussians.add_new_gs(opt, tb_writer, iteration=iteration, cap_max=opt.cap_max, add_ratio=add_ratio)
 
 				if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
 					if opt.gs_type == "original" and iteration <= opt.prune_until:

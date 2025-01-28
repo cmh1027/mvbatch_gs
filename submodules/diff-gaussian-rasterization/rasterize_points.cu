@@ -174,7 +174,7 @@ RasterizeGaussiansBackwardCUDA(
 	const torch::Tensor& imageBuffer,
 	torch::Tensor& mask,
 	const float low_pass,
-	const bool grad_sep,
+	const int grad_sep,
 	const bool time_check,
 	const bool debug)
 {
@@ -269,19 +269,47 @@ RasterizeGaussiansBackwardCUDA(
 		dL_dsh_sum.scatter_add_(0, point_idx.expand({-1, M*3}), dL_dsh);
 		dL_dsh_sum = dL_dsh_sum.reshape({P, M, 3});
 
-		if(grad_sep){
-			torch::Tensor dL_dmeans2D_clone = torch::zeros({P, 1}, means3D.options());
-			torch::Tensor dL_dmeans2D_split = torch::zeros({P, 1}, means3D.options());
-			dL_dmeans2D_clone.scatter_add_(0, point_idx.expand({-1, 1}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}).norm(2, -1, true));
-			dL_dmeans2D_split.scatter_add_(0, point_idx.expand({-1, 1}), dL_dmeans2D_sq);
-			dL_dmeans2D_sum = torch::cat({dL_dmeans2D_clone,dL_dmeans2D_split}, -1);
-		}
-		else{
-			torch::Tensor dL_dmeans2D_clone = torch::zeros({P, 2}, means3D.options());
-			torch::Tensor dL_dmeans2D_split = torch::zeros({P, 2}, means3D.options());
-			dL_dmeans2D_clone.scatter_add_(0, point_idx.expand({-1, 2}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}));
-			dL_dmeans2D_split.scatter_add_(0, point_idx.expand({-1, 2}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}));
-			dL_dmeans2D_sum = torch::cat({dL_dmeans2D_clone.norm(2, -1, true), dL_dmeans2D_split.norm(2, -1, true)}, -1);
+		torch::Tensor dL_dmeans2D_clone = torch::empty({0}, means3D.options());
+		torch::Tensor dL_dmeans2D_split = torch::empty({0}, means3D.options());
+		switch(grad_sep){
+			case 0:
+				dL_dmeans2D_clone = torch::zeros({P, 2}, means3D.options());
+				dL_dmeans2D_split = torch::zeros({P, 2}, means3D.options());
+				dL_dmeans2D_clone.scatter_add_(0, point_idx.expand({-1, 2}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}));
+				dL_dmeans2D_split.scatter_add_(0, point_idx.expand({-1, 2}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}));
+				dL_dmeans2D_sum = torch::cat({dL_dmeans2D_clone.norm(2, -1, true), dL_dmeans2D_split.norm(2, -1, true)}, -1);
+				break;
+			case 1:
+				dL_dmeans2D_clone = torch::zeros({P, 1}, means3D.options());
+				dL_dmeans2D_split = torch::zeros({P, 1}, means3D.options());
+				dL_dmeans2D_clone.scatter_add_(0, point_idx.expand({-1, 1}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}).norm(2, -1, true));
+				dL_dmeans2D_split.scatter_add_(0, point_idx.expand({-1, 1}), dL_dmeans2D_sq);
+				dL_dmeans2D_sum = torch::cat({dL_dmeans2D_clone,dL_dmeans2D_split}, -1);
+				break;
+			case 2:
+				dL_dmeans2D_clone = torch::zeros({P, 1}, means3D.options());
+				dL_dmeans2D_split = torch::zeros({P, 1}, means3D.options());
+				dL_dmeans2D_clone.scatter_add_(0, point_idx.expand({-1, 1}), dL_dmeans2D_sq);
+				dL_dmeans2D_split.scatter_add_(0, point_idx.expand({-1, 1}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}).norm(2, -1, true));
+				dL_dmeans2D_sum = torch::cat({dL_dmeans2D_clone,dL_dmeans2D_split}, -1);
+				break;
+			case 3:
+				dL_dmeans2D_clone = torch::zeros({P, 1}, means3D.options());
+				dL_dmeans2D_split = torch::zeros({P, 1}, means3D.options());
+				dL_dmeans2D_clone.scatter_add_(0, point_idx.expand({-1, 1}), dL_dmeans2D_sq);
+				dL_dmeans2D_split.scatter_add_(0, point_idx.expand({-1, 1}), dL_dmeans2D_sq);
+				dL_dmeans2D_sum = torch::cat({dL_dmeans2D_clone,dL_dmeans2D_split}, -1);
+				break;
+			case 4:
+				dL_dmeans2D_clone = torch::zeros({P, 1}, means3D.options());
+				dL_dmeans2D_split = torch::zeros({P, 1}, means3D.options());
+				dL_dmeans2D_clone.scatter_add_(0, point_idx.expand({-1, 1}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}).norm(2, -1, true));
+				dL_dmeans2D_split.scatter_add_(0, point_idx.expand({-1, 1}), dL_dmeans2D.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)}).norm(2, -1, true));
+				dL_dmeans2D_sum = torch::cat({dL_dmeans2D_clone,dL_dmeans2D_split}, -1);
+				break;
+			default:
+				printf("Invalid gradient separation\n");
+				exit(0);
 		}
 	}
 	ERROR_CHECK
@@ -290,8 +318,8 @@ RasterizeGaussiansBackwardCUDA(
 
 torch::Tensor markVisible(
 		torch::Tensor& means3D,
-		torch::Tensor& viewmatrix,
-		torch::Tensor& projmatrix)
+		torch::Tensor& viewmatrix
+)
 { 
   const int P = means3D.size(0);
   
@@ -302,7 +330,6 @@ torch::Tensor markVisible(
 	CudaRasterizer::Rasterizer::markVisible(P,
 		means3D.contiguous().data<float>(),
 		viewmatrix.contiguous().data<float>(),
-		projmatrix.contiguous().data<float>(),
 		present.contiguous().data<bool>());
   }
   
@@ -355,4 +382,3 @@ torch::Tensor MakeCategoryMaskCUDA(
 
 	return category_mask;
 }
-

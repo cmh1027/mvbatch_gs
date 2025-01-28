@@ -58,8 +58,6 @@ class ModelParams(ParamGroup):
         self._white_background = False
         self.data_device = "cuda"
         self.eval = True
-        self.cap_max = -1
-        self.cap_max_gs = -1
         self.init_type = "sfm"
         self.radius_mult = 3.0
         self.num_points = 100000
@@ -96,24 +94,22 @@ class OptimizationParams(ParamGroup):
         self.lr_coef = 1.
         self.percent_dense = 0.01
         self.loss_type = "l1"
-
         self.lambda_dssim = 0.2
-
         self.densification_interval = 100
         self.densify_from_iter = 500
         self.densify_until_iter = 25_000
         self.random_background = False
+        self.cap_max = -1
 
         ### 3dgs ###
         self.opacity_reset_interval = 3000
         self.prune_threshold = 0.005
         self.opacity_reset_value = 0.01
         self.densify_grad_clone_threshold = 0.0002
-        self.densify_grad_split_threshold = 0.0004
-        self.grad_sep = False
+        self.densify_grad_split_threshold = 0.0002
+        self.grad_sep = 1
         self.prune_interval = 100
         self.prune_until = 25000
-        self.max_points = 6000000
         
         ### 3dgs-mcmc ###
         self.add_ratio = 0.05
@@ -136,8 +132,7 @@ class OptimizationParams(ParamGroup):
         self.gs_type = "mcmc" # ["original", "mcmc"]
 
         self.predictable_growth = False
-        self.predictable_growth_degree = 5.0
-        self.predictable_growth_degree_3dgs = 5.0
+        self.predictable_growth_degree_3dgs = 3.0
         self.predictable_growth_degree_mcmc = 2.0
 
         self.time_check = False

@@ -63,14 +63,14 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const torch::Tensor& imageBuffer,
 	torch::Tensor& mask,
 	const float low_pass,
-	const bool grad_sep,
+	const int grad_sep,
 	const bool time_check,
 	const bool debug);
 		
 torch::Tensor markVisible(
-		torch::Tensor& means3D,
-		torch::Tensor& viewmatrix,
-		torch::Tensor& projmatrix);
+	torch::Tensor& means3D,
+	torch::Tensor& viewmatrix
+);
 
 std::tuple<torch::Tensor, torch::Tensor> ComputeRelocationCUDA(
 		torch::Tensor& opacity_old,

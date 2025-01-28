@@ -507,12 +507,9 @@ class GaussianModel:
             selected_pts_mask = torch.zeros_like(padded_grad).to(torch.bool)
             selected_pts_mask[selected_idx] = True
         else:
-            available = opt.max_points - self.get_xyz.shape[0]
+            available = opt.cap_max - self.get_xyz.shape[0]
             if available <= 0: return
-            if opt.split_original:
-                threshold = opt.densify_grad_clone_threshold
-            else:
-                threshold = opt.densify_grad_split_threshold
+            threshold = opt.densify_grad_split_threshold
             selected_pts_mask = torch.where(padded_grad >= threshold, True, False)
             selected_pts_mask = torch.logical_and(selected_pts_mask, torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
             if available < selected_pts_mask.sum():
@@ -541,7 +538,7 @@ class GaussianModel:
             selected_pts_mask = torch.zeros_like(grads.squeeze()).to(torch.bool)
             selected_pts_mask[selected_idx] = True
         else:
-            available = opt.max_points - self.get_xyz.shape[0]
+            available = opt.cap_max - self.get_xyz.shape[0]
             if available <= 0: return
             threshold = opt.densify_grad_clone_threshold
             selected_pts_mask = torch.where(grads.squeeze() >= threshold, True, False)
