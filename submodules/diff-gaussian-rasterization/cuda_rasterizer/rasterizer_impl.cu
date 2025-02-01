@@ -317,6 +317,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 	float* out_depth,
 	float* out_trans,
 	int* radii,
+	int* gaussian_visibility,
 	const int* mask,
 	const bool time_check,
 	bool debug)
@@ -460,7 +461,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		render_tile_grid, render_block,
 		imgState.ranges,
 		binningState.point_list,
-		width, height, B,
+		width, height, B, P,
 		geomState.means2D,
 		geomState.rgb,
 		geomState.depths,
@@ -471,7 +472,9 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		out_color,
 		out_depth,
 		out_trans,
+		gaussian_visibility,
 		mask,
+		geomState.point_index,
 		geomState.point_batch_index
 	), time_check, start, renderTime)
 

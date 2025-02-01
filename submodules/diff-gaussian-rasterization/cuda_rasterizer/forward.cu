@@ -322,7 +322,7 @@ __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 renderCUDA(
 	const uint2* __restrict__ ranges,
 	const uint32_t* __restrict__ point_list,
-	int W, int H, int B,
+	int W, int H, int B, int P,
 	const float2* __restrict__ points_xy_image,
 	const float* __restrict__ features,
 	const float* __restrict__ depths,
@@ -333,7 +333,9 @@ renderCUDA(
 	float* __restrict__ out_color,
 	float* __restrict__ out_depth,
 	float* __restrict__ out_trans,
+	int* __restrict__ gaussian_visibility,
 	const int* __restrict__ mask, // (PW*PH, BLOCK_X*BLOCK_Y)
+	const int* __restrict__ point_index,
 	const int* __restrict__ point_batch_index)
 {
 	// Identify current tile and associated min/max pixel range.
@@ -444,6 +446,8 @@ renderCUDA(
 			if (alpha < 1.0f / 255.0f)
 				continue;
 			float test_T = T * (1 - alpha);
+			gaussian_visibility[P * batch_idx + point_index[collected_id[j]]] = 1;
+			
 			if (test_T < 0.0001f)
 			{
 				done = true;
@@ -473,7 +477,7 @@ renderCUDA(
 		for (int ch = 0; ch < CHANNELS; ch++)
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
 		// out_depth[pix_id] = D;
-		// out_trans[pix_id] = T;
+		out_trans[pix_id] = T;
 	}
 }
 
@@ -481,7 +485,7 @@ void FORWARD::render(
 	const dim3 grid, dim3 block,
 	const uint2* ranges,
 	const uint32_t* point_list,
-	int W, int H, int B,
+	int W, int H, int B, int P,
 	const float2* means2D,
 	const float* colors,
 	const float* depths,
@@ -492,29 +496,35 @@ void FORWARD::render(
 	float* out_color,
 	float* out_depth,
 	float* out_trans,
+	int* gaussian_visibility,
 	const int* mask,
+	const int* point_index,
 	const int* point_batch_index
 )
 {
 	switch(B){
 		case 1:
 			renderCUDA<NUM_CHANNELS, 1> << <grid, block >> > (
-				ranges, point_list, W, H, B, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_depth, out_trans, mask, point_batch_index
+				ranges, point_list, W, H, B, P, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, 
+				out_color, out_depth, out_trans, gaussian_visibility, mask, point_index, point_batch_index
 			);
 			break;
 		case 2:
 			renderCUDA<NUM_CHANNELS, 2> << <grid, block >> > (
-				ranges, point_list, W, H, B, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_depth, out_trans, mask, point_batch_index
+				ranges, point_list, W, H, B, P, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, 
+				out_color, out_depth, out_trans, gaussian_visibility, mask, point_index, point_batch_index
 			);
 			break;
 		case 4:
 			renderCUDA<NUM_CHANNELS, 4> << <grid, block >> > (
-				ranges, point_list, W, H, B, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_depth, out_trans, mask, point_batch_index
+				ranges, point_list, W, H, B, P, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, 
+				out_color, out_depth, out_trans, gaussian_visibility, mask, point_index, point_batch_index
 			);
 			break;
 		case 8:
 			renderCUDA<NUM_CHANNELS, 8> << <grid, block >> > (
-				ranges, point_list, W, H, B, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, out_color, out_depth, out_trans, mask, point_batch_index
+				ranges, point_list, W, H, B, P, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, 
+				out_color, out_depth, out_trans, gaussian_visibility, mask, point_index, point_batch_index
 			);
 			break;
 		default:

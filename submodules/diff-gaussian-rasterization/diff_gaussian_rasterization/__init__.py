@@ -83,7 +83,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             geomBuffer, 
             binningBuffer, 
             imgBuffer, 
-            mask,
+            gaussian_visibility,
             measureTime, 
             preprocessTime, 
             renderTime
@@ -98,17 +98,17 @@ class _RasterizeGaussians(torch.autograd.Function):
         ctx.raster_settings = raster_settings
         ctx.num_rendered = num_rendered
         ctx.batch_num_rendered = batch_num_rendered
-        ctx.save_for_backward(means3D, scales, rotations, radii, sh, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask)
-        return rendered_color, radii, rendered_depth, residual_trans
+        ctx.save_for_backward(means3D, scales, rotations, radii, sh, cacheBuffer, geomBuffer, binningBuffer, imgBuffer)
+        return rendered_color, radii, rendered_depth, residual_trans, gaussian_visibility
 
     @staticmethod
-    def backward(ctx, grad_out_color, grad_radii, grad_depth, grad_trans):
+    def backward(ctx, grad_out_color, grad_radii, grad_depth, grad_trans, grad_visibility):
 
         # Restore necessary values from context
         num_rendered = ctx.num_rendered
         batch_num_rendered = ctx.batch_num_rendered
         raster_settings = ctx.raster_settings
-        means3D, scales, rotations, radii, sh, cacheBuffer, geomBuffer, binningBuffer, imgBuffer, mask = ctx.saved_tensors
+        means3D, scales, rotations, radii, sh, cacheBuffer, geomBuffer, binningBuffer, imgBuffer = ctx.saved_tensors
         
         # Restructure args as C++ method expects them
         args = (raster_settings.bg,
@@ -133,7 +133,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                 batch_num_rendered,
                 binningBuffer,
                 imgBuffer,
-                mask,
+                raster_settings.mask,
                 raster_settings.grad_sep,
                 raster_settings.time_check,
                 raster_settings.debug)

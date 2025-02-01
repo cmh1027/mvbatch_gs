@@ -74,7 +74,7 @@ namespace FORWARD
 		const dim3 grid, dim3 block,
 		const uint2* ranges,
 		const uint32_t* point_list,
-		int W, int H, int B,
+		int W, int H, int B, int P,
 		const float2* points_xy_image,
 		const float* features,
 		const float* depth,
@@ -85,7 +85,9 @@ namespace FORWARD
 		float* out_color,
 		float* out_depth,
 		float* out_trans,
+		int* gaussian_visibility,
 		const int* mask,
+		const int* point_index,
 		const int* point_batch_index
 	);
 }

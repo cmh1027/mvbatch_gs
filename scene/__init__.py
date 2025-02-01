@@ -108,3 +108,9 @@ class Scene:
 
     def getAllViewMatrix(self, scale=1.0):
         return torch.stack([cam.world_view_transform for cam in self.train_cameras[scale]])
+
+    def compute_viewpoint_distance(self, visibility):
+        """
+        visibility : (P, num_views)
+        """
+        pass

@@ -91,7 +91,7 @@ class OptimizationParams(ParamGroup):
         self.opacity_lr = 0.05
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
-        self.lr_coef = 1.
+
         self.percent_dense = 0.01
         self.loss_type = "l1"
         self.lambda_dssim = 0.2
@@ -109,7 +109,6 @@ class OptimizationParams(ParamGroup):
         self.densify_grad_split_threshold = 0.0002
         self.grad_sep = 1
         self.prune_interval = 100
-        self.prune_until = 25000
         
         ### 3dgs-mcmc ###
         self.add_ratio = 0.05
@@ -118,22 +117,21 @@ class OptimizationParams(ParamGroup):
         self.opacity_reg = 0.01
         
         self.batch_sample_strategy = "random" # ["max", "random"]
-        self.batch_sample_count = True
         self.batch_size = 1
-        self.batch_until = -1
         self.mask_height = 32
         self.mask_width = 32
 
-        self.only_psnr = False
+        
         self.log_batch = False
         self.log_batch_interval = 1
 
+        self.full_evaluate = False
         self.evaluate_time = False
         self.gs_type = "mcmc" # ["original", "mcmc"]
 
         self.predictable_growth = False
         self.predictable_growth_degree_3dgs = 3.0
-        self.predictable_growth_degree_mcmc = 2.0
+        self.predictable_growth_degree_mcmc = 3.0
 
         self.time_check = False
         super().__init__(parser, "Optimization Parameters")

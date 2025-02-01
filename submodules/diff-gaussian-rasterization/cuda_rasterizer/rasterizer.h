@@ -52,6 +52,7 @@ namespace CudaRasterizer
 			float* out_depth,
 			float* out_trans,
 			int* radii,
+			int* gaussian_visibility,
 			const int* mask,
 			const bool time_check,
 			bool debug = false);
