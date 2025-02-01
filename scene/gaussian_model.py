@@ -57,6 +57,7 @@ class GaussianModel:
         self.vs_split_accum = torch.empty(0)
         self.denom = torch.empty(0)
         self.gaussian_visibility = torch.empty(0)
+        self.visibility_mapping = torch.empty(0)
         self.optimizer = None
         self.percent_dense = 0
         self.spatial_lr_scale = 0
@@ -168,7 +169,6 @@ class GaussianModel:
         self.percent_dense = training_args.percent_dense
         self.vs_clone_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.vs_split_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.gaussian_visibility = torch.zeros((self.get_xyz.shape[0], num_cams), device="cuda", dtype=torch.uint8)
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
 
         l = [
@@ -316,7 +316,6 @@ class GaussianModel:
 
         self.vs_clone_accum = self.vs_clone_accum[valid_points_mask]
         self.vs_split_accum = self.vs_split_accum[valid_points_mask]
-        self.gaussian_visibility = self.gaussian_visibility[valid_points_mask]
         self.denom = self.denom[valid_points_mask]
         self.max_radii2D = self.max_radii2D[valid_points_mask]
 
@@ -342,7 +341,7 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_visibility):
+    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation):
         d = {"xyz": new_xyz,
         "f_dc": new_features_dc,
         "f_rest": new_features_rest,
@@ -361,21 +360,7 @@ class GaussianModel:
         self.vs_clone_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.vs_split_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.gaussian_visibility = torch.cat([self.gaussian_visibility, new_visibility], dim=0)
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
-
-    def reset_gaussian_visibility(self, purge=False):
-        if purge:
-            self.gaussian_visibility = self.gaussian_visibility[..., :1]
-        else:
-            self.gaussian_visibility.fill_(0)
-
-    def update_gaussian_visibility(self, gaussian_visibility, cam_idxs):
-        """
-        radii : (B, P)
-        """
-        self.gaussian_visibility.T[cam_idxs] = self.gaussian_visibility.T[cam_idxs] | gaussian_visibility.to(torch.uint8)
-
 
     ########## 3dgs-mcmc ##########
 
@@ -489,8 +474,7 @@ class GaussianModel:
 
         self._opacity[idx] = new_opacity
         self._scaling[idx] = new_scaling
-        new_visibility = self.gaussian_visibility[idx]
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_visibility)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation)
         self.replace_tensors_to_optimizer(inds=idx)
     
     ########## original 3dgs ##########
@@ -531,8 +515,7 @@ class GaussianModel:
         new_features_dc = self._features_dc[selected_pts_mask].repeat(N,1,1)
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
-        new_visibility = self.gaussian_visibility[selected_pts_mask].repeat(N,1)
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_visibility)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation)
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
 
@@ -559,8 +542,7 @@ class GaussianModel:
         new_opacities = self._opacity[selected_pts_mask]
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
-        new_visibility = self.gaussian_visibility[selected_pts_mask]
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_visibility)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation)
 
     def densify(self, tb_writer, opt, extent, add_pts_count, iteration):
         grads_clone = self.vs_clone_accum / self.denom
@@ -591,3 +573,16 @@ class GaussianModel:
         self.vs_clone_accum[update_filter] += vs_clone[update_filter]
         self.vs_split_accum[update_filter] += vs_split[update_filter]
         self.denom[update_filter] += denom[update_filter]
+
+    def update_visibility(self, visibility, cam_idxs):
+        self.gaussian_visibility[cam_idxs] = visibility | self.gaussian_visibility[cam_idxs]
+
+    def reset_visibility(self, viewpoint_count, max_voxel=100):
+        xyz = self.get_xyz
+        m = xyz.min(dim=0, keepdim=True).values
+        M = xyz.max(dim=0, keepdim=True).values
+        voxel_size = ((M-m) * (max_voxel-1) / (M-m).max()).int()
+        voxel = (((xyz - m) / (M - m)) * voxel_size).int()
+        mx, my, mz = voxel.max(dim=0).values
+        self.visibility_mapping = voxel[..., 0] + voxel[..., 1]  * (mx+1) + voxel[..., 2] * (mx+1) * (my+1) 
+        self.gaussian_visibility = torch.zeros((viewpoint_count, (mx+1) * (my+1) * (mz+1)), device="cuda", dtype=torch.int32) # (B, HS)

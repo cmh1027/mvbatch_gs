@@ -94,11 +94,12 @@ def training(dataset, opt, pipe, args):
 	from_iter = opt.densify_from_iter
 	num_pts_func = compute_pts_func(opt.cap_max, gaussians.num_pts, (opt.densify_until_iter - from_iter) // opt.densification_interval, predictable_growth_degree)
 
+	if opt.viewpoint_sampling_farthest:
+		gaussians.reset_visibility(len(scene.getTrainCameras()), max_voxel=opt.voxel_max_size)
+
 	start_time = time.time()
 
 	for iteration in range(first_iter, opt.iterations + 1): 
-		if iteration == 2000:
-			breakpoint()
 		gt_images = []
 		xyz_lr = gaussians.update_learning_rate(iteration)
 
@@ -115,7 +116,7 @@ def training(dataset, opt, pipe, args):
 		if opt.batch_size == 1:
 			cam_idxs = torch.tensor([cam_idx], device=torch.device('cuda'))
 		else:
-			cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size)
+			cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, farthest=opt.viewpoint_sampling_farthest, )
 
 		cam_idxs.clamp_(max=len(viewpoints)-1)
 		cams = [viewpoints[idx] for idx in cam_idxs]
@@ -123,11 +124,13 @@ def training(dataset, opt, pipe, args):
 		bg = torch.rand((3), device="cuda") if opt.random_background else background
 
 		pmask = torch.sort(torch.rand(partial_height * partial_width, opt.mask_height * opt.mask_width, device=torch.device('cuda'))).indices.to(torch.int32)
-
 		kwargs = {
 			"mask" : pmask,
 			"grad_sep": opt.grad_sep,
-			"time_check": opt.time_check
+			"time_check": opt.time_check,
+			"HS": gaussians.gaussian_visibility.shape[1],
+			"visibility_mapping": gaussians.visibility_mapping,
+			"write_visibility": opt.viewpoint_sampling_farthest
 		} 
 		if opt.time_check:
 			torch.cuda.synchronize()
@@ -137,22 +140,14 @@ def training(dataset, opt, pipe, args):
 			torch.cuda.synchronize()
 			forward_time = time.time() - start
 
-		(image, depth, residual_trans, viewspace_point_tensor, radii, gaussian_visibility, log_buffer) = (
+		(image, depth, viewspace_point_tensor, radii, gaussian_visibility, log_buffer) = (
 			render_pkg["render"][:3, ...], 
 			render_pkg["depth"],
-			render_pkg["residual_trans"],
 			render_pkg["viewspace_points"], 
 			render_pkg["radii"],
 			render_pkg["gaussian_visibility"],
 			render_pkg["log_buffer"]
 		)
-
-		if iteration <= args.update_visibility[-1]:
-			gaussians.update_gaussian_visibility(gaussian_visibility, cam_idxs) 
-		if iteration in args.update_visibility:
-			scene.compute_viewpoint_distance(gaussians.gaussian_visibility)
-			gaussians.reset_gaussian_visibility(purge=(iteration==args.update_visibility[-1]))
-
 		if len(cams) > 1:
 			gt_images = torch.stack([cam.original_image.cuda() for cam in cams]) # (3, H, W)
 			collage_mask = make_category_mask(pmask, H, W, opt.batch_size).to(torch.int64)
@@ -207,6 +202,8 @@ def training(dataset, opt, pipe, args):
 			tb_writer.add_scalar(f'time/total/forward', forward_time, iteration)
 			tb_writer.add_scalar(f'time/total/backward', backward_time, iteration)
 
+		if opt.viewpoint_sampling_farthest:
+			gaussians.update_visibility(gaussian_visibility, cam_idxs)
 
 		with torch.no_grad():
 			# Progress bar
@@ -267,6 +264,13 @@ def training(dataset, opt, pipe, args):
 						else:
 							add_ratio = opt.add_ratio
 						gaussians.add_new_gs(opt, tb_writer, iteration=iteration, cap_max=opt.cap_max, add_ratio=add_ratio)
+					
+					else:
+						raise NotImplementedError
+					
+					if opt.viewpoint_sampling_farthest:
+						scene.viewpoint_feature = gaussians.gaussian_visibility
+						gaussians.reset_visibility(len(scene.getTrainCameras()), max_voxel=opt.voxel_max_size)
 
 				if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
 					if opt.gs_type == "original":
@@ -287,12 +291,10 @@ def training(dataset, opt, pipe, args):
 					figs = [pred, gt]
 					save_image(torch.cat(figs, dim=1), os.path.join(dataset.model_path, f"vis/iter_{iteration}.png"))
 
-			if opt.log_batch and iteration % opt.log_batch_interval == 0 and not opt.evaluate_time:
+			if opt.log_batch and iteration % opt.log_batch_interval == 0 and opt.log_batch_from <= iteration and not opt.evaluate_time:
 				os.makedirs(os.path.join(dataset.model_path, "batch"), exist_ok=True)
 				with torch.no_grad():
-					for i, image in enumerate(gt_images.unbind(dim=0)):
-						os.makedirs(os.path.join(dataset.model_path, f"batch/{'%05d' % iteration}"), exist_ok=True)
-						save_image(image, os.path.join(dataset.model_path, f"batch/{'%05d' % iteration}/{'%05d' % i}.png"))
+					save_image(torch.cat(gt_images.unbind(0), dim=1), os.path.join(dataset.model_path, f"batch/{'%05d' % iteration}.png"))
 
 			# Optimizer step
 			if iteration < opt.iterations:
@@ -441,7 +443,6 @@ if __name__ == "__main__":
 	parser.add_argument("--override_cap_max", type=int)
 	parser.add_argument("--override_degree_3dgs", type=float)
 	parser.add_argument("--override_degree_mcmc", type=float)
-	parser.add_argument("--update_visibility", nargs="+", type=int, default=[1500,4500,7500])
 
 
 	args = parser.parse_args(sys.argv[1:])

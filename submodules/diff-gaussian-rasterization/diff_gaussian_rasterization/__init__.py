@@ -68,6 +68,9 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.sh_degree,
             raster_settings.campos,
             raster_settings.mask,
+            raster_settings.HS,
+            raster_settings.visibility_mapping,
+            raster_settings.write_visibility,
             raster_settings.time_check,
             raster_settings.debug
         )
@@ -176,9 +179,12 @@ class GaussianRasterizationSettings(NamedTuple):
     debug : bool
     mask : torch.Tensor
     log_buffer: dict
-    normalize_grad2D : bool
     grad_sep: bool
     time_check: bool
+    HS : int
+    visibility_mapping : torch.Tensor
+    write_visibility : bool
+    
 
 class GaussianRasterizer(nn.Module):
     def __init__(self, raster_settings):

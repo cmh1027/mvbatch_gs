@@ -52,6 +52,9 @@ RasterizeGaussiansCUDA(
 	const int degree,
 	const torch::Tensor& campos,
 	torch::Tensor& mask,
+	const int HS,
+	const torch::Tensor& visibility_mapping, // (P, 1) => max values HS
+	const bool write_visibility,
 	const bool time_check,
 	const bool debug)
 {
@@ -71,7 +74,6 @@ RasterizeGaussiansCUDA(
 	const int H = image_height;
 	const int W = image_width;
 	const int B = viewmatrix.size(0);
-
 	assert(BLOCK_X * BLOCK_Y % B == 0);
 
 	auto int_opts = means3D.options().dtype(torch::kInt32);
@@ -81,7 +83,6 @@ RasterizeGaussiansCUDA(
 	torch::Tensor out_depth = torch::full({1, H, W}, 0.0, float_opts);
 	torch::Tensor out_trans = torch::full({1, H, W}, 0.0, float_opts);
 	torch::Tensor radii = torch::full({B, P}, 0, means3D.options().dtype(torch::kInt32));
-	torch::Tensor gaussian_visibility = torch::full({B, P}, 0, means3D.options().dtype(torch::kInt32));
 	
 	torch::Device device(torch::kCUDA);
 	torch::TensorOptions options(torch::kByte);
@@ -97,6 +98,8 @@ RasterizeGaussiansCUDA(
 
 	torch::Tensor focal_y = H / (2.0f * tan_fovy);
 	torch::Tensor focal_x = W / (2.0f * tan_fovx);
+
+	torch::Tensor gaussian_visibility = torch::full({B, HS}, 0, means3D.options().dtype(torch::kInt32));
 
 	int rendered = 0;
 	int batch_rendered = 0;
@@ -114,7 +117,7 @@ RasterizeGaussiansCUDA(
 			binningFunc,
 			imgFunc,
 			cacheFunc,
-			P, degree, M, B,
+			P, degree, M, B, HS,
 			background.contiguous().data<float>(),
 			W, H,
 			means3D.contiguous().data<float>(),
@@ -135,6 +138,8 @@ RasterizeGaussiansCUDA(
 			out_trans.contiguous().data<float>(),
 			radii.contiguous().data<int>(),
 			gaussian_visibility.contiguous().data<int>(),
+			visibility_mapping.contiguous().data<int>(),
+			write_visibility,
 			mask.contiguous().data<int>(),
 			time_check,
 			debug
@@ -172,7 +177,7 @@ RasterizeGaussiansBackwardCUDA(
 	const int BR,
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
-	torch::Tensor& mask,
+	const torch::Tensor& mask,
 	const int grad_sep,
 	const bool time_check,
 	const bool debug)

@@ -33,6 +33,9 @@ RasterizeGaussiansCUDA(
 	const int degree,
 	const torch::Tensor& campos,
 	torch::Tensor& mask,
+	const int HS,
+	const torch::Tensor& visibility_mapping,
+	const bool write_visibility,
 	const bool time_check,
 	const bool debug);
 
@@ -60,7 +63,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const int BR,
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
-	torch::Tensor& mask,
+	const torch::Tensor& mask,
 	const int grad_sep,
 	const bool time_check,
 	const bool debug);

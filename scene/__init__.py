@@ -86,6 +86,8 @@ class Scene:
                                                            "point_cloud.ply"))
         else:
             self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, init_scale=args.init_scale)
+        
+        self.viewpoint_feature = None
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
@@ -97,10 +99,35 @@ class Scene:
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]
 
-    def sample_cameras(self, idx, N=2):
-        indices = torch.randperm(len(self.getTrainCameras()), device=torch.device('cuda'))
-        indices = indices[indices != idx][:N-1]
-        selected = torch.cat([torch.tensor([idx], device=torch.device('cuda')), indices])
+    def sample_cameras(self, idx, N=2, farthest=False, mode="simple"):
+        if not farthest or self.viewpoint_feature is None: # random
+            indices = torch.randperm(len(self.getTrainCameras()), device='cuda')
+            indices = indices[indices != idx][:N-1]
+            selected = torch.cat([torch.tensor([idx], device='cuda'), indices])
+        else:
+            """
+            viewpoint_feature : (B, HS)
+            """
+            cam_idxs = torch.tensor([idx], device='cuda')
+            masked_feature = self.viewpoint_feature & ~self.viewpoint_feature[[idx]]
+            if mode == "simple":
+                weight = masked_feature.sum(dim=-1).float()
+                sampled = torch.multinomial(weight, N-1)
+                cam_idxs = torch.cat([cam_idxs, sampled])
+            elif mode == "all":
+                while len(cam_idxs) < N:
+                    weight = masked_feature.sum(dim=-1).float()
+                    if weight.max() == 0:
+                        indices = torch.randperm(len(self.getTrainCameras()), device=torch.device('cuda'))
+                        sampled = indices[~torch.isin(indices, cam_idxs)][:N-len(cam_idxs)]
+                        cam_idxs = torch.cat([cam_idxs, sampled])
+                    else:
+                        sampled = torch.multinomial(weight, 1)
+                        cam_idxs = torch.cat([cam_idxs, sampled])
+                        masked_feature = masked_feature & ~self.viewpoint_feature[[sampled]]
+            else:
+                raise NotImplementedError
+            selected = cam_idxs
         return selected
 
     def getAllProjMatrix(self, scale=1.0):
@@ -108,9 +135,3 @@ class Scene:
 
     def getAllViewMatrix(self, scale=1.0):
         return torch.stack([cam.world_view_transform for cam in self.train_cameras[scale]])
-
-    def compute_viewpoint_distance(self, visibility):
-        """
-        visibility : (P, num_views)
-        """
-        pass

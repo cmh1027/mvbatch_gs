@@ -123,7 +123,8 @@ class OptimizationParams(ParamGroup):
 
         
         self.log_batch = False
-        self.log_batch_interval = 1
+        self.log_batch_interval = 10
+        self.log_batch_from = 2000
 
         self.full_evaluate = False
         self.evaluate_time = False
@@ -134,6 +135,9 @@ class OptimizationParams(ParamGroup):
         self.predictable_growth_degree_mcmc = 3.0
 
         self.time_check = False
+        self.viewpoint_sampling_farthest = False
+        self.viewpoint_sampling_mode = "simple" # ['simple', 'all']
+        self.voxel_max_size = 100
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

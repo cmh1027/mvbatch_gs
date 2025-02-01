@@ -15,7 +15,9 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 FOV_WARN = False
-def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, mask=None, normalize_grad2D=False, grad_sep=1, time_check=False):
+def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, 
+           mask=None, grad_sep=1, time_check=False, 
+           HS=1, visibility_mapping=None, write_visibility=False):
     """
     Render the scene. 
     
@@ -42,6 +44,9 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
 
     if mask is None: 
         mask = torch.empty(0, dtype=torch.int32)
+    if visibility_mapping is None: 
+        visibility_mapping = torch.empty(0, dtype=torch.int32)
+
     log_buffer = {}
     raster_settings = GaussianRasterizationSettings(
         image_height=image_height,
@@ -57,9 +62,11 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
         mask=mask,
         debug=pipe.debug,
         log_buffer=log_buffer,
-        normalize_grad2D=normalize_grad2D,
         grad_sep=grad_sep,
-        time_check=time_check
+        time_check=time_check,
+        HS=HS,
+        visibility_mapping=visibility_mapping,
+        write_visibility=write_visibility
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
@@ -80,6 +87,7 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
         opacities = opacity,
         scales = scales,
         rotations = rotations)
+    
     return_dict =  {"render": rendered_image,
                     "viewspace_points": screenspace_points,
                     "radii": radii,
