@@ -56,8 +56,8 @@ class GaussianModel:
         self.vs_clone_accum = torch.empty(0)
         self.vs_split_accum = torch.empty(0)
         self.denom = torch.empty(0)
-        self.gaussian_visibility = torch.empty(0)
-        self.visibility_mapping = torch.empty(0)
+        self.gaussian_visibility = torch.empty(0, dtype=torch.int32)
+        self.visibility_mapping = torch.empty(0, dtype=torch.int32)
         self.optimizer = None
         self.percent_dense = 0
         self.spatial_lr_scale = 0

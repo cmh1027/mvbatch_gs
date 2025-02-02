@@ -116,7 +116,7 @@ def training(dataset, opt, pipe, args):
 		if opt.batch_size == 1:
 			cam_idxs = torch.tensor([cam_idx], device=torch.device('cuda'))
 		else:
-			cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, farthest=opt.viewpoint_sampling_farthest, )
+			cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, farthest=opt.viewpoint_sampling_farthest, mode=opt.viewpoint_sampling_mode)
 
 		cam_idxs.clamp_(max=len(viewpoints)-1)
 		cams = [viewpoints[idx] for idx in cam_idxs]
@@ -128,7 +128,7 @@ def training(dataset, opt, pipe, args):
 			"mask" : pmask,
 			"grad_sep": opt.grad_sep,
 			"time_check": opt.time_check,
-			"HS": gaussians.gaussian_visibility.shape[1],
+			"HS": gaussians.gaussian_visibility.shape[1] if opt.viewpoint_sampling_farthest else 1,
 			"visibility_mapping": gaussians.visibility_mapping,
 			"write_visibility": opt.viewpoint_sampling_farthest
 		} 

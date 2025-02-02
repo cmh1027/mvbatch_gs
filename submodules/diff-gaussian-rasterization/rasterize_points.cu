@@ -205,19 +205,20 @@ RasterizeGaussiansBackwardCUDA(
 	torch::Tensor dL_dconic = torch::zeros({BR, 2, 2}, means3D.options());
 	torch::Tensor dL_dcov3D = torch::zeros({BR, 6}, means3D.options());
 
-	torch::Tensor dL_dopacity = torch::zeros({P, 1}, means3D.options());
 	torch::Tensor point_idx = torch::zeros({BR, 1}, means3D.options().dtype(torch::kInt32));
 
 	torch::Tensor dL_dmeans3D = torch::zeros({BR, 3}, means3D.options());
 	torch::Tensor dL_dscales = torch::zeros({BR, 3}, means3D.options());
 	torch::Tensor dL_drotations = torch::zeros({BR, 4}, means3D.options());
 	torch::Tensor dL_dsh = torch::zeros({BR, M*3}, means3D.options());
+	torch::Tensor dL_dopacity = torch::zeros({BR, 1}, means3D.options());
 
 	torch::Tensor dL_dmeans2D_sum = torch::zeros({P, 2}, means3D.options());
 	torch::Tensor dL_dmeans3D_sum = torch::zeros({P, 3}, means3D.options());
 	torch::Tensor dL_dscales_sum = torch::zeros({P, 3}, means3D.options());
 	torch::Tensor dL_drotations_sum = torch::zeros({P, 4}, means3D.options());
 	torch::Tensor dL_dsh_sum = torch::zeros({P, M*3}, means3D.options());
+	torch::Tensor dL_dopacity_sum = torch::zeros({P, 1}, means3D.options());
 
 	double preprocessTime, renderTime;
 	if(BR != 0)
@@ -271,6 +272,7 @@ RasterizeGaussiansBackwardCUDA(
 		dL_drotations_sum.scatter_add_(0, point_idx.expand({-1, 4}), dL_drotations);
 		dL_dsh_sum.scatter_add_(0, point_idx.expand({-1, M*3}), dL_dsh);
 		dL_dsh_sum = dL_dsh_sum.reshape({P, M, 3});
+		dL_dopacity_sum.scatter_add_(0, point_idx.expand({-1, 1}), dL_dopacity);
 
 		torch::Tensor dL_dmeans2D_clone = torch::empty({0}, means3D.options());
 		torch::Tensor dL_dmeans2D_split = torch::empty({0}, means3D.options());
@@ -316,7 +318,7 @@ RasterizeGaussiansBackwardCUDA(
 		}
 	}
 	ERROR_CHECK
-  	return std::make_tuple(dL_dmeans2D_sum, dL_dopacity, dL_dmeans3D_sum, dL_dsh_sum, dL_dscales_sum, dL_drotations_sum, preprocessTime, renderTime);
+  	return std::make_tuple(dL_dmeans2D_sum, dL_dopacity_sum, dL_dmeans3D_sum, dL_dsh_sum, dL_dscales_sum, dL_drotations_sum, preprocessTime, renderTime);
 }
 
 torch::Tensor markVisible(
