@@ -447,13 +447,14 @@ renderCUDA(
 			float alpha = min(0.99f, con_o.w * exp(power));
 			if (alpha < 1.0f / 255.0f)
 				continue;
+				
 			float test_T = T * (1 - alpha);
 			if(write_visibility){
 				gaussian_visibility[HS * batch_idx + visibility_mapping[point_index[collected_id[j]]]] = 1;
 			}
 			
 			
-			if (test_T < 0.0001f)
+			if (test_T < MIN_T)
 			{
 				done = true;
 				continue;

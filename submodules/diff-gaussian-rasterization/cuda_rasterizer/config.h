@@ -15,6 +15,7 @@
 #define NUM_CHANNELS 3 // Default 3, RGB
 #define BLOCK_X 32
 #define BLOCK_Y 32
+#define MIN_T 0.0001f
 #endif
 
 #define TILE_MASK  0xffff000000000000

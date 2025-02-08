@@ -135,8 +135,9 @@ class OptimizationParams(ParamGroup):
         self.predictable_growth_degree_mcmc = 3.0
 
         self.time_check = False
-        self.viewpoint_sampling_farthest = False
+        self.viewpoint_sampling = False
         self.viewpoint_sampling_mode = "simple" # ['simple', 'all']
+        self.viewpoint_sampling_minimum = False # ['simple', 'all']
         self.voxel_max_size = 100
         super().__init__(parser, "Optimization Parameters")
 

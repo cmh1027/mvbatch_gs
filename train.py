@@ -94,11 +94,12 @@ def training(dataset, opt, pipe, args):
 	from_iter = opt.densify_from_iter
 	num_pts_func = compute_pts_func(opt.cap_max, gaussians.num_pts, (opt.densify_until_iter - from_iter) // opt.densification_interval, predictable_growth_degree)
 
-	if opt.viewpoint_sampling_farthest:
+	if opt.viewpoint_sampling:
 		gaussians.reset_visibility(len(scene.getTrainCameras()), max_voxel=opt.voxel_max_size)
 
 	start_time = time.time()
-
+	logging_denom = torch.zeros((opt.iterations, opt.batch_size+1), dtype=torch.int32, device='cuda')
+	
 	for iteration in range(first_iter, opt.iterations + 1): 
 		gt_images = []
 		xyz_lr = gaussians.update_learning_rate(iteration)
@@ -116,7 +117,7 @@ def training(dataset, opt, pipe, args):
 		if opt.batch_size == 1:
 			cam_idxs = torch.tensor([cam_idx], device=torch.device('cuda'))
 		else:
-			cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, farthest=opt.viewpoint_sampling_farthest, mode=opt.viewpoint_sampling_mode)
+			cam_idxs = scene.sample_cameras(cam_idx, N=opt.batch_size, farthest=opt.viewpoint_sampling, mode=opt.viewpoint_sampling_mode, minimum=opt.viewpoint_sampling_minimum)
 
 		cam_idxs.clamp_(max=len(viewpoints)-1)
 		cams = [viewpoints[idx] for idx in cam_idxs]
@@ -128,9 +129,9 @@ def training(dataset, opt, pipe, args):
 			"mask" : pmask,
 			"grad_sep": opt.grad_sep,
 			"time_check": opt.time_check,
-			"HS": gaussians.gaussian_visibility.shape[1] if opt.viewpoint_sampling_farthest else 1,
+			"HS": gaussians.gaussian_visibility.shape[1] if opt.viewpoint_sampling else 1,
 			"visibility_mapping": gaussians.visibility_mapping,
-			"write_visibility": opt.viewpoint_sampling_farthest
+			"write_visibility": opt.viewpoint_sampling
 		} 
 		if opt.time_check:
 			torch.cuda.synchronize()
@@ -202,7 +203,7 @@ def training(dataset, opt, pipe, args):
 			tb_writer.add_scalar(f'time/total/forward', forward_time, iteration)
 			tb_writer.add_scalar(f'time/total/backward', backward_time, iteration)
 
-		if opt.viewpoint_sampling_farthest:
+		if opt.viewpoint_sampling:
 			gaussians.update_visibility(gaussian_visibility, cam_idxs)
 
 		with torch.no_grad():
@@ -236,6 +237,7 @@ def training(dataset, opt, pipe, args):
 					vs_clone = viewspace_point_tensor.grad[..., 0:1]
 					vs_split = viewspace_point_tensor.grad[..., 1:2]
 					denom = (radii > 0).sum(dim=0)[..., None] / len(cams)
+					logging_denom[iteration-1] = torch.bincount((radii > 0).sum(dim=0), minlength=opt.batch_size+1)
 					gaussians.add_densification_stats(vs_clone, vs_split, mask, denom)
 
 				if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
@@ -268,7 +270,7 @@ def training(dataset, opt, pipe, args):
 					else:
 						raise NotImplementedError
 					
-					if opt.viewpoint_sampling_farthest:
+					if opt.viewpoint_sampling:
 						scene.viewpoint_feature = gaussians.gaussian_visibility
 						gaussians.reset_visibility(len(scene.getTrainCameras()), max_voxel=opt.voxel_max_size)
 
@@ -318,7 +320,10 @@ def training(dataset, opt, pipe, args):
 	end_time = time.time()
 	with open(os.path.join(dataset.model_path, "info.txt"), "w") as f:
 		f.write(f"num_points : {gaussians.num_pts}")
-
+	with open(os.path.join(dataset.model_path, "viewpoint_count.json"), "w") as f:
+		json.dump(scene.viewpoint_sample_count.int().tolist(), f)
+	with open(os.path.join(dataset.model_path, "denom.json"), "w") as f:
+		json.dump(logging_denom.tolist(), f)
 	if opt.evaluate_time:
 		elasped_sec = end_time - start_time
 		with open(os.path.join(dataset.model_path, "elapsed.txt"), "w") as f:

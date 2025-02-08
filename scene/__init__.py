@@ -88,6 +88,8 @@ class Scene:
             self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, init_scale=args.init_scale)
         
         self.viewpoint_feature = None
+        if not skip_train:
+            self.viewpoint_sample_count = torch.rand(len(self.getTrainCameras()), device='cuda') + 1.
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
@@ -99,7 +101,7 @@ class Scene:
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]
 
-    def sample_cameras(self, idx, N=2, farthest=False, mode="simple"):
+    def sample_cameras(self, idx, N=2, farthest=False, mode="simple", minimum=False):
         if not farthest or self.viewpoint_feature is None: # random
             indices = torch.randperm(len(self.getTrainCameras()), device='cuda')
             indices = indices[indices != idx][:N-1]
@@ -108,11 +110,16 @@ class Scene:
             """
             viewpoint_feature : (B, HS)
             """
-            cam_idxs = torch.tensor([idx], device='cuda')
-            masked_feature = self.viewpoint_feature & ~self.viewpoint_feature[[idx]]
+            # cam_idxs = torch.tensor([self.viewpoint_sample_count], device='cuda')
+            cam_idxs = self.viewpoint_sample_count.argmin()[None]
+            if minimum:
+                masked_feature = self.viewpoint_feature & self.viewpoint_feature[[idx]]
+            else:
+                masked_feature = self.viewpoint_feature & ~self.viewpoint_feature[[idx]]
             if mode == "simple":
-                weight = masked_feature.sum(dim=-1).float()
+                weight = (masked_feature.sum(dim=-1).float()+1).sqrt() / self.viewpoint_sample_count
                 sampled = torch.multinomial(weight, N-1)
+                # sampled = torch.topk(weight + torch.rand_like(weight), N-1).indices
                 cam_idxs = torch.cat([cam_idxs, sampled])
             elif mode == "all":
                 while len(cam_idxs) < N:
@@ -128,6 +135,7 @@ class Scene:
             else:
                 raise NotImplementedError
             selected = cam_idxs
+        self.viewpoint_sample_count[selected] += 1
         return selected
 
     def getAllProjMatrix(self, scale=1.0):
