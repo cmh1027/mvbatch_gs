@@ -116,7 +116,6 @@ class OptimizationParams(ParamGroup):
         self.scale_reg = 0.01
         self.opacity_reg = 0.01
         
-        self.batch_sample_strategy = "random" # ["max", "random"]
         self.batch_size = 1
         self.mask_height = 32
         self.mask_width = 32
@@ -124,7 +123,7 @@ class OptimizationParams(ParamGroup):
         
         self.log_batch = False
         self.log_batch_interval = 10
-        self.log_batch_from = 2000
+        self.log_batch_from = 1000
 
         self.full_evaluate = False
         self.evaluate_time = False
@@ -136,8 +135,6 @@ class OptimizationParams(ParamGroup):
 
         self.time_check = False
         self.viewpoint_sampling = False
-        self.viewpoint_sampling_mode = "simple" # ['simple', 'all']
-        self.viewpoint_sampling_minimum = False # ['simple', 'all']
         self.voxel_max_size = 100
         super().__init__(parser, "Optimization Parameters")
 

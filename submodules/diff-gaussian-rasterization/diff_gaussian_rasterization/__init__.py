@@ -49,7 +49,6 @@ class _RasterizeGaussians(torch.autograd.Function):
         rotations,
         raster_settings,
     ):
-
         # Restructure arguments the way that the C++ lib expects them
         args = (
             raster_settings.bg, 
@@ -68,8 +67,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.sh_degree,
             raster_settings.campos,
             raster_settings.mask,
-            raster_settings.HS,
-            raster_settings.visibility_mapping,
+            raster_settings.voxel_info,
             raster_settings.write_visibility,
             raster_settings.time_check,
             raster_settings.debug
@@ -181,9 +179,8 @@ class GaussianRasterizationSettings(NamedTuple):
     log_buffer: dict
     grad_sep: bool
     time_check: bool
-    HS : int
-    visibility_mapping : torch.Tensor
     write_visibility : bool
+    voxel_info : torch.Tensor
     
 
 class GaussianRasterizer(nn.Module):

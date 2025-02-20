@@ -54,6 +54,12 @@
 		} \
 	}
 
+#pragma once
+struct float9
+{
+	float x, y, z, a, b, c, p, q, r;
+};
+
 // #define DEBUG
 #ifdef DEBUG
     #define TIMEPRINT(fmt, ...) printf(fmt, ##__VA_ARGS__);

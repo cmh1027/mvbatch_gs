@@ -22,18 +22,21 @@ from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 from utils.graphics_utils import getWorld2View2
 from utils.general_utils import gmm_kl
+import torch
+from torch_linear_assignment import batch_linear_assignment
 
 class Scene:
 
     gaussians : GaussianModel
 
-    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], skip_train=False, skip_test=False):
+    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], skip_train=False, skip_test=False, sampling_mode='None'):
         """b
         :param path: Path to colmap scene main folder.
         """
         self.model_path = args.model_path
         self.loaded_iter = None
         self.gaussians = gaussians
+        self.sampling_mode = sampling_mode
 
         if load_iteration:
             if load_iteration == -1:
@@ -86,10 +89,7 @@ class Scene:
                                                            "point_cloud.ply"))
         else:
             self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, init_scale=args.init_scale)
-        
-        self.viewpoint_feature = None
-        if not skip_train:
-            self.viewpoint_sample_count = torch.rand(len(self.getTrainCameras()), device='cuda') + 1.
+            
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
@@ -101,45 +101,52 @@ class Scene:
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]
 
-    def sample_cameras(self, idx, N=2, farthest=False, mode="simple", minimum=False):
-        if not farthest or self.viewpoint_feature is None: # random
-            indices = torch.randperm(len(self.getTrainCameras()), device='cuda')
-            indices = indices[indices != idx][:N-1]
-            selected = torch.cat([torch.tensor([idx], device='cuda'), indices])
+class ViewpointSampler:
+    def __init__(self, gaussians : GaussianModel, num_viewpoints, batch_size, viewpoint_sampling):
+        self.gaussians = gaussians
+        self.num_viewpoint = num_viewpoints
+        self.batch_size = batch_size
+        self.viewpoint_sampling = viewpoint_sampling
+        self.refill_queue(init=True)
+        self.viewpoint_sample_count = torch.ones(num_viewpoints, dtype=torch.int32, device='cuda')
+
+    def sample_cameras(self):
+        cam_idxs = self.queue[0]
+        self.queue = self.queue[1:]
+        if len(self.queue) == 0:
+            self.refill_queue()
+        self.viewpoint_sample_count[cam_idxs] += 1
+        return cam_idxs
+
+    def refill_queue(self, init=False):
+        if self.batch_size == 1:
+            self.queue = torch.randperm(self.num_viewpoint, device='cuda').reshape(-1, 1) 
         else:
-            """
-            viewpoint_feature : (B, HS)
-            """
-            # cam_idxs = torch.tensor([self.viewpoint_sample_count], device='cuda')
-            cam_idxs = self.viewpoint_sample_count.argmin()[None]
-            if minimum:
-                masked_feature = self.viewpoint_feature & self.viewpoint_feature[[idx]]
+            if init or not self.viewpoint_sampling:
+                self.queue = torch.randperm(self.num_viewpoint, device='cuda')
+                if len(self.queue) % self.batch_size != 0:
+                    pad_size = self.batch_size - len(self.queue) % self.batch_size
+                    pad_values = self.queue[:pad_size]
+                    self.queue = torch.cat([self.queue, pad_values], dim=0)
+                self.queue = self.queue.reshape(-1, self.batch_size)
             else:
-                masked_feature = self.viewpoint_feature & ~self.viewpoint_feature[[idx]]
-            if mode == "simple":
-                weight = (masked_feature.sum(dim=-1).float()+1).sqrt() / self.viewpoint_sample_count
-                sampled = torch.multinomial(weight, N-1)
-                # sampled = torch.topk(weight + torch.rand_like(weight), N-1).indices
-                cam_idxs = torch.cat([cam_idxs, sampled])
-            elif mode == "all":
-                while len(cam_idxs) < N:
-                    weight = masked_feature.sum(dim=-1).float()
-                    if weight.max() == 0:
-                        indices = torch.randperm(len(self.getTrainCameras()), device=torch.device('cuda'))
-                        sampled = indices[~torch.isin(indices, cam_idxs)][:N-len(cam_idxs)]
-                        cam_idxs = torch.cat([cam_idxs, sampled])
-                    else:
-                        sampled = torch.multinomial(weight, 1)
-                        cam_idxs = torch.cat([cam_idxs, sampled])
-                        masked_feature = masked_feature & ~self.viewpoint_feature[[sampled]]
-            else:
-                raise NotImplementedError
-            selected = cam_idxs
-        self.viewpoint_sample_count[selected] += 1
-        return selected
+                self.queue = torch.arange(self.num_viewpoint, device='cuda').reshape(-1, 1)
+                feature = visibility = self.gaussians.gaussian_visibility
+                while self.queue.shape[1] < self.batch_size:
+                    weight = self.dissim_matrix(feature) # (N, N)
+                    assignment = batch_linear_assignment(-weight[None])[0] # (N,)
+                    self.queue = torch.cat([
+                        self.queue,
+                        self.queue[assignment]
+                    ], dim=-1)
+                    feature = torch.stack([visibility[k] for k in self.queue.unbind(dim=-1)]).max(dim=0).values
+                self.queue = self.queue[torch.randperm(self.queue.shape[0], device='cuda')]
+                self.gaussians.reset_voxel()
+                self.gaussians.reset_gaussian_visibility(self.num_viewpoint)
+                
 
-    def getAllProjMatrix(self, scale=1.0):
-        return torch.stack([cam.full_proj_transform for cam in self.train_cameras[scale]])
-
-    def getAllViewMatrix(self, scale=1.0):
-        return torch.stack([cam.world_view_transform for cam in self.train_cameras[scale]])
+    def dissim_matrix(self, feature): # (N, P)
+        feature = feature.float()
+        difference = feature @ (1-feature).permute(1, 0) # (N, N)
+        normalize_factor = feature.sum(dim=-1)[None, ...] + feature.sum(dim=-1)[..., None] - difference # union
+        return  difference / normalize_factor

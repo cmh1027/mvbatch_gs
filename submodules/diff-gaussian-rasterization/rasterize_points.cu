@@ -52,8 +52,7 @@ RasterizeGaussiansCUDA(
 	const int degree,
 	const torch::Tensor& campos,
 	torch::Tensor& mask,
-	const int HS,
-	const torch::Tensor& visibility_mapping, // (P, 1) => max values HS
+	const torch::Tensor& voxel_info,
 	const bool write_visibility,
 	const bool time_check,
 	const bool debug)
@@ -98,7 +97,7 @@ RasterizeGaussiansCUDA(
 
 	torch::Tensor focal_y = H / (2.0f * tan_fovy);
 	torch::Tensor focal_x = W / (2.0f * tan_fovx);
-
+	int HS = ((voxel_info[0]+1) * (voxel_info[1]+1) * (voxel_info[2]+1)).item<int>();
 	torch::Tensor gaussian_visibility = torch::full({B, HS}, 0, means3D.options().dtype(torch::kInt32));
 
 	int rendered = 0;
@@ -117,7 +116,7 @@ RasterizeGaussiansCUDA(
 			binningFunc,
 			imgFunc,
 			cacheFunc,
-			P, degree, M, B, HS,
+			P, degree, M, B,
 			background.contiguous().data<float>(),
 			W, H,
 			means3D.contiguous().data<float>(),
@@ -138,7 +137,7 @@ RasterizeGaussiansCUDA(
 			out_trans.contiguous().data<float>(),
 			radii.contiguous().data<int>(),
 			gaussian_visibility.contiguous().data<int>(),
-			visibility_mapping.contiguous().data<int>(),
+			voxel_info.contiguous().data<float>(),
 			write_visibility,
 			mask.contiguous().data<int>(),
 			time_check,

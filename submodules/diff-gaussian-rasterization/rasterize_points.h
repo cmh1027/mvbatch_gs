@@ -33,8 +33,7 @@ RasterizeGaussiansCUDA(
 	const int degree,
 	const torch::Tensor& campos,
 	torch::Tensor& mask,
-	const int HS,
-	const torch::Tensor& visibility_mapping,
+	const torch::Tensor& voxel_info,
 	const bool write_visibility,
 	const bool time_check,
 	const bool debug);

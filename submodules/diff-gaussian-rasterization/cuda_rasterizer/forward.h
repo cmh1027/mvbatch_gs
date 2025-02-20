@@ -17,7 +17,7 @@
 #include "device_launch_parameters.h"
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
-
+#include "config.h"
 namespace FORWARD
 {
 	// Perform initial steps for each Gaussian prior to rasterization.
@@ -37,7 +37,10 @@ namespace FORWARD
 		const dim3 grid,
 		const int* mask,
 		int* batch_num_rendered,
-		bool* batch_rendered_check
+		bool* batch_rendered_check,
+		bool write_visibility,
+		const float9* voxel_info,
+		int* voxel_mapping
 	);
 
 	void preprocess(int BR, int P, int D, int M,
@@ -74,7 +77,7 @@ namespace FORWARD
 		const dim3 grid, dim3 block,
 		const uint2* ranges,
 		const uint32_t* point_list,
-		int W, int H, int B, int P, int HS,
+		int W, int H, int B, int P,
 		const float2* points_xy_image,
 		const float* features,
 		const float* depth,
@@ -86,7 +89,8 @@ namespace FORWARD
 		float* out_depth,
 		float* out_trans,
 		int* gaussian_visibility,
-		const int* visibility_mapping,
+		const float9* voxel_size,
+		const int* voxel_mapping,
 		const bool write_visibility,
 		const int* mask,
 		const int* point_index,

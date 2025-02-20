@@ -57,7 +57,6 @@ class GaussianModel:
         self.vs_split_accum = torch.empty(0)
         self.denom = torch.empty(0)
         self.gaussian_visibility = torch.empty(0, dtype=torch.int32)
-        self.visibility_mapping = torch.empty(0, dtype=torch.int32)
         self.optimizer = None
         self.percent_dense = 0
         self.spatial_lr_scale = 0
@@ -165,7 +164,7 @@ class GaussianModel:
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
 
-    def training_setup(self, training_args, num_cams=1):
+    def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
         self.vs_clone_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.vs_split_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -577,12 +576,17 @@ class GaussianModel:
     def update_visibility(self, visibility, cam_idxs):
         self.gaussian_visibility[cam_idxs] = visibility | self.gaussian_visibility[cam_idxs]
 
-    def reset_visibility(self, viewpoint_count, max_voxel=100):
+    @torch.no_grad()
+    def reset_voxel(self, max_voxel=100):
         xyz = self.get_xyz
-        m = xyz.min(dim=0, keepdim=True).values
-        M = xyz.max(dim=0, keepdim=True).values
-        voxel_size = ((M-m) * (max_voxel-1) / (M-m).max()).int()
-        voxel = (((xyz - m) / (M - m)) * voxel_size).int()
-        mx, my, mz = voxel.max(dim=0).values
-        self.visibility_mapping = voxel[..., 0] + voxel[..., 1]  * (mx+1) + voxel[..., 2] * (mx+1) * (my+1) 
-        self.gaussian_visibility = torch.zeros((viewpoint_count, (mx+1) * (my+1) * (mz+1)), device="cuda", dtype=torch.int32) # (B, HS)
+        xyzM_ = xyz.max(dim=0, keepdim=True).values
+        xyzm_ = xyz.min(dim=0, keepdim=True).values
+        xyzDisp = (xyzM_ - xyzm_) / 2
+        self.xyzM = xyzM_ + xyzDisp
+        self.xyzm = xyzm_ - xyzDisp
+        self.voxel_size = ((self.xyzM-self.xyzm) * (max_voxel-1) / (self.xyzM-self.xyzm).max()).floor() # ex. (77., 28., 99.)
+        self.voxel_info = torch.cat([self.voxel_size, self.xyzm, self.xyzM]).flatten()
+
+    def reset_gaussian_visibility(self, viewpoint_count):
+        vx, vy, vz = self.voxel_size[0].int()
+        self.gaussian_visibility = torch.zeros((viewpoint_count, (vx+1) * (vy+1) * (vz+1)), device="cuda", dtype=torch.int32) # (B, HS)

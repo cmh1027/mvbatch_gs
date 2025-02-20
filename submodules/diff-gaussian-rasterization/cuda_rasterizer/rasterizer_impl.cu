@@ -242,6 +242,7 @@ CudaRasterizer::CacheState CudaRasterizer::CacheState::fromChunk(char*& chunk, s
 	obtain(chunk, cache.batch_rendered_check, P*B, 128);
     cub::DeviceScan::InclusiveSum(nullptr, cache.scan_size, cache.batch_num_rendered, cache.batch_num_rendered_sums, P);
     obtain(chunk, cache.scanning_space, cache.scan_size, 128);
+	obtain(chunk, cache.voxel_mapping, P, 128);
 
 	return cache;
 }
@@ -297,7 +298,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 	std::function<char* (size_t)> binningBuffer,
 	std::function<char* (size_t)> imageBuffer,
 	std::function<char* (size_t)> cacheBuffer,
-	const int P, int D, int M, int B, int HS,
+	const int P, int D, int M, int B,
 	const float* background,
 	const int width, int height,
 	const float* means3D,
@@ -318,7 +319,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 	float* out_trans,
 	int* radii,
 	int* gaussian_visibility,
-	const int* visibility_mapping,
+	const float* voxel_info,
 	const bool write_visibility,
 	const int* mask,
 	const bool time_check,
@@ -354,7 +355,10 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		tile_grid,
 		mask,
 		cacheState.batch_num_rendered,
-		cacheState.batch_rendered_check
+		cacheState.batch_rendered_check,
+		write_visibility,
+		(float9*)voxel_info,
+		cacheState.voxel_mapping
 	), time_check, start, measureTime)
 
 
@@ -463,7 +467,7 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		render_tile_grid, render_block,
 		imgState.ranges,
 		binningState.point_list,
-		width, height, B, P, HS,
+		width, height, B, P, 
 		geomState.means2D,
 		geomState.rgb,
 		geomState.depths,
@@ -475,7 +479,8 @@ std::tuple<int, int, float, float, float> CudaRasterizer::Rasterizer::forward(
 		out_depth,
 		out_trans,
 		gaussian_visibility,
-		visibility_mapping,
+		(float9*)voxel_info,
+		cacheState.voxel_mapping,
 		write_visibility,
 		mask,
 		geomState.point_index,

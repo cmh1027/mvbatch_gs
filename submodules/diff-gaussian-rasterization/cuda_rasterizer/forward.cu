@@ -151,7 +151,8 @@ __device__ void computeCov3D(const glm::vec3 scale, float mod, const glm::vec4 r
 	cov3D[5] = Sigma[2][2];
 }
 
-__global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
+__global__ void measureBufferSizeCUDA(
+	int P, int D, int M, int B,
 	const float* orig_points,
 	const glm::vec3* scales,
 	const float scale_modifier,
@@ -166,7 +167,10 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	const dim3 grid,
 	const int* mask,
 	int* batch_num_rendered,
-	bool* batch_rendered_check
+	bool* batch_rendered_check,
+	bool write_visibility,
+	const float9* voxel_info,
+	int* voxel_mapping
 )
 {
 	auto idx = cg::this_grid().thread_rank();
@@ -174,6 +178,19 @@ __global__ void measureBufferSizeCUDA(int P, int D, int M, int B,
 	int batch_idx = idx / P;
 	if (batch_idx >= B || idx >= B * P) return;
 	idx = idx % P;
+
+	/* voxel mapping */
+	if(batch_idx == 0 && write_visibility){
+		int vx = voxel_info->x, vy = voxel_info->y, vz = voxel_info->z;
+		float m_x = voxel_info->a, m_y = voxel_info->b, m_z = voxel_info->c; 
+		float M_x = voxel_info->p, M_y = voxel_info->q, M_z = voxel_info->r;
+		float3 mean3D = ((float3*)orig_points)[idx];
+		float x_ = mean3D.x, y_ = mean3D.y, z_ = mean3D.z;
+		int mapping_x = clamp((((x_ - m_x) / (M_x - m_x)) * vx), 0, vx);
+		int mapping_y = clamp((((y_ - m_y) / (M_y - m_y)) * vy), 0, vy);
+		int mapping_z = clamp((((z_ - m_z) / (M_z - m_z)) * vz), 0, vz);
+		voxel_mapping[idx] = mapping_x + mapping_y * (vx+1) + mapping_z * (vx+1) * (vy+1);
+	}
 
 	/* batch offset */
 	viewmatrix += batch_idx * 16;
@@ -322,7 +339,7 @@ __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 renderCUDA(
 	const uint2* __restrict__ ranges,
 	const uint32_t* __restrict__ point_list,
-	int W, int H, int B, int P, int HS,
+	int W, int H, int B, int P,
 	const float2* __restrict__ points_xy_image,
 	const float* __restrict__ features,
 	const float* __restrict__ depths,
@@ -334,7 +351,8 @@ renderCUDA(
 	float* __restrict__ out_depth,
 	float* __restrict__ out_trans,
 	int* __restrict__ gaussian_visibility,
-	const int* __restrict__ visibility_mapping,
+	const float9* __restrict__ voxel_info,
+	const int* __restrict__ voxel_mapping,
 	const bool write_visibility,
 	const int* __restrict__ mask, // (PW*PH, BLOCK_X*BLOCK_Y)
 	const int* __restrict__ point_index,
@@ -450,7 +468,8 @@ renderCUDA(
 				
 			float test_T = T * (1 - alpha);
 			if(write_visibility){
-				gaussian_visibility[HS * batch_idx + visibility_mapping[point_index[collected_id[j]]]] = 1;
+				int vx = voxel_info->x, vy = voxel_info->y, vz = voxel_info->z;
+				gaussian_visibility[(vx+1)*(vy+1)*(vz+1) * batch_idx + voxel_mapping[point_index[collected_id[j]]]] = 1;
 			}
 			
 			
@@ -491,7 +510,7 @@ void FORWARD::render(
 	const dim3 grid, dim3 block,
 	const uint2* ranges,
 	const uint32_t* point_list,
-	int W, int H, int B, int P, int HS,
+	int W, int H, int B, int P, 
 	const float2* means2D,
 	const float* colors,
 	const float* depths,
@@ -503,7 +522,8 @@ void FORWARD::render(
 	float* out_depth,
 	float* out_trans,
 	int* gaussian_visibility,
-	const int* visibility_mapping,
+	const float9* voxel_info,
+	const int* voxel_mapping,
 	const bool write_visibility,
 	const int* mask,
 	const int* point_index,
@@ -513,33 +533,33 @@ void FORWARD::render(
 	switch(B){
 		case 1:
 			renderCUDA<NUM_CHANNELS, 1> << <grid, block >> > (
-				ranges, point_list, W, H, B, P, HS, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, 
+				ranges, point_list, W, H, B, P, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, 
 				out_color, out_depth, out_trans, 
-				gaussian_visibility, visibility_mapping, write_visibility, 
+				gaussian_visibility, voxel_info, voxel_mapping, write_visibility, 
 				mask, point_index, point_batch_index
 			);
 			break;
 		case 2:
 			renderCUDA<NUM_CHANNELS, 2> << <grid, block >> > (
-				ranges, point_list, W, H, B, P, HS, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, 
+				ranges, point_list, W, H, B, P, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, 
 				out_color, out_depth, out_trans, 
-				gaussian_visibility, visibility_mapping, write_visibility, 
+				gaussian_visibility, voxel_info, voxel_mapping, write_visibility, 
 				mask, point_index, point_batch_index
 			);
 			break;
 		case 4:
 			renderCUDA<NUM_CHANNELS, 4> << <grid, block >> > (
-				ranges, point_list, W, H, B, P, HS, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, 
+				ranges, point_list, W, H, B, P, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, 
 				out_color, out_depth, out_trans, 
-				gaussian_visibility, visibility_mapping, write_visibility, 
+				gaussian_visibility, voxel_info, voxel_mapping, write_visibility, 
 				mask, point_index, point_batch_index
 			);
 			break;
 		case 8:
 			renderCUDA<NUM_CHANNELS, 8> << <grid, block >> > (
-				ranges, point_list, W, H, B, P, HS, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, 
+				ranges, point_list, W, H, B, P, means2D, colors, depths, conic_opacity, final_T, n_contrib, bg_color, 
 				out_color, out_depth, out_trans, 
-				gaussian_visibility, visibility_mapping, write_visibility, 
+				gaussian_visibility, voxel_info, voxel_mapping, write_visibility, 
 				mask, point_index, point_batch_index
 			);
 			break;
@@ -610,7 +630,8 @@ void FORWARD::preprocess(int BR, int P, int D, int M,
 	ERROR_CHECK
 }
 
-void FORWARD::measureBufferSize(int P, int D, int M, int B,
+void FORWARD::measureBufferSize(
+	int P, int D, int M, int B,
 	const float* orig_points,
 	const glm::vec3* scales,
 	const float scale_modifier,
@@ -625,7 +646,10 @@ void FORWARD::measureBufferSize(int P, int D, int M, int B,
 	const dim3 grid,
 	const int* mask,
 	int* batch_num_rendered,
-	bool* batch_rendered_check
+	bool* batch_rendered_check,
+	bool write_visibility,
+	const float9* voxel_info,
+	int* voxel_mapping
 )
 {
 	measureBufferSizeCUDA << <(B * P + 255) / 256, 256 >> > (
@@ -642,7 +666,10 @@ void FORWARD::measureBufferSize(int P, int D, int M, int B,
 		grid,
 		mask,
 		batch_num_rendered,
-		batch_rendered_check
+		batch_rendered_check,
+		write_visibility,
+		voxel_info,
+		voxel_mapping
 	);
 	ERROR_CHECK
 }

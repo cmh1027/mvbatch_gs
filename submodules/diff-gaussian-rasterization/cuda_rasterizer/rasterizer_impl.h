@@ -34,6 +34,7 @@ namespace CudaRasterizer
 		bool* batch_rendered_check;
 		size_t scan_size;
 		char* scanning_space;
+		int* voxel_mapping;
 		static CacheState fromChunk(char*& chunk, size_t P, size_t B);
 	};
 

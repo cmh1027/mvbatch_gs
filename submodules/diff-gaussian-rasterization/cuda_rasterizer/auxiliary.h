@@ -42,6 +42,7 @@ __forceinline__ __device__ float ndc2Pix(float v, int S)
 	return ((v + 1.0) * S - 1.0) * 0.5;
 }
 
+
 __forceinline__ __device__ void getRect(const float2 p, int max_radius, uint2& rect_min, uint2& rect_max, dim3 grid)
 {
 	rect_min = {
@@ -178,6 +179,10 @@ __forceinline__ __device__ bool in_frustum_NDC(int idx,
 	return true;
 }
 
+__forceinline__ __device__ int clamp(int v, int min, int max)
+{
+	return (v < min) ? min : (v > max) ? max : v;
+}
 
 #define CHECK_CUDA(A, debug) \
 A; if(debug) { \

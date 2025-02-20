@@ -17,7 +17,7 @@ from utils.sh_utils import eval_sh
 FOV_WARN = False
 def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, 
            mask=None, grad_sep=1, time_check=False, 
-           HS=1, visibility_mapping=None, write_visibility=False):
+           write_visibility=False, voxel_info=None):
     """
     Render the scene. 
     
@@ -44,8 +44,8 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
 
     if mask is None: 
         mask = torch.empty(0, dtype=torch.int32)
-    if visibility_mapping is None: 
-        visibility_mapping = torch.empty(0, dtype=torch.int32)
+    if voxel_info is None: 
+        voxel_info = torch.ones(9, device='cuda')
 
     log_buffer = {}
     raster_settings = GaussianRasterizationSettings(
@@ -64,9 +64,8 @@ def render(viewpoint_cameras, pc : GaussianModel, pipe, bg_color : torch.Tensor,
         log_buffer=log_buffer,
         grad_sep=grad_sep,
         time_check=time_check,
-        HS=HS,
-        visibility_mapping=visibility_mapping,
-        write_visibility=write_visibility
+        write_visibility=write_visibility,
+        voxel_info=voxel_info
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
