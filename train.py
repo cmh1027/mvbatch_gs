@@ -240,7 +240,7 @@ def training(dataset, opt, pipe, args):
                     xyz_from_depth = torch.zeros((H, W, 3), device=image.device)
                     ssim_sigma = torch.zeros((H, W), device=image.device)
                     for i in range(len(cams)):
-                        xyz_from_depth_ = cams[i].depth_map_to_3d(depth[0].detach()) + i * 1000
+                        xyz_from_depth_ = cams[i].depth_map_to_3d(depth[0].detach())
                         focal_mean = (cams[i].fx * cams[i].fy) ** 0.5
                         if opt.ssim_sigma_end > 0:
                             ssim_sigma_ = opt.ssim_sigma + (opt.ssim_sigma_end - opt.ssim_sigma) * (iteration / opt.iterations)
