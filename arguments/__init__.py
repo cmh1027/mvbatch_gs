@@ -128,7 +128,7 @@ class OptimizationParams(ParamGroup):
 
         self.full_evaluate = False
         self.evaluate_time = False
-        self.gs_type = "mcmc" # ["original", "mcmc"]
+        self.gs_type = "mcmc" # ["3dgs", "mcmc"]
 
         self.predictable_growth = False
         self.predictable_growth_degree_3dgs = 3.0
@@ -139,6 +139,12 @@ class OptimizationParams(ParamGroup):
         self.viewpoint_sampling_mode = "simple" # ['simple', 'all']
         self.viewpoint_sampling_minimum = False # ['simple', 'all']
         self.voxel_max_size = 100
+        
+        self.loss_mult = 1.0
+        self.ssim_sigma = 0.0
+        self.ssim_sigma_end = -1.0
+        self.ssim_window_size = 5
+        self.full_training_step = 0
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

@@ -400,7 +400,7 @@ renderCUDA(
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
 	float C[CHANNELS] = { 0 };
-	// float D = { 0 };
+	float D = { 0 };
 
 	// Iterate over batches until all done or range is complete
 	for (int i = 0; i < rounds; i++, toDo -= THREAD_SIZE)
@@ -465,7 +465,7 @@ renderCUDA(
 				C[ch] += collected_colors[ch * THREAD_SIZE + j] * alpha * T;
 			// for (int ch = 0; ch < CHANNELS; ch++)
 			// 	C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
-			// D += depths[collected_id[j]] * alpha * T;
+			D += depths[collected_id[j]] * alpha * T;
 
 			T = test_T;
 
@@ -482,7 +482,7 @@ renderCUDA(
 		n_contrib[pix_id] = last_contributor;
 		for (int ch = 0; ch < CHANNELS; ch++)
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
-		// out_depth[pix_id] = D;
+		out_depth[pix_id] = D;
 		out_trans[pix_id] = T;
 	}
 }

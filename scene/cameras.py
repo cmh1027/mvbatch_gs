@@ -40,6 +40,11 @@ class Camera(nn.Module):
         self.image_width = self.original_image.shape[2]
         self.image_height = self.original_image.shape[1]
 
+        self.fx = (self.image_width / 2) / math.tan(self.FoVx / 2)
+        self.fy = (self.image_height / 2) / math.tan(self.FoVy / 2)
+        self.cx = self.image_width / 2
+        self.cy = self.image_height / 2
+
         if gt_alpha_mask is not None:
             self.original_image *= gt_alpha_mask.to(self.data_device)
         else:
@@ -58,7 +63,7 @@ class Camera(nn.Module):
                                                      W=self.image_width, H=self.image_height).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         
-    def depth_map_to_3d(self, depth_map):
+    def depth_map_to_cam(self, depth_map):
         """
         Convert a depth map to 3D coordinates using intrinsic camera parameters.
 
@@ -68,20 +73,28 @@ class Camera(nn.Module):
         """
         h, w = depth_map.shape
         assert self.image_width == w and self.image_height == h, "Depth map shape does not match camera resolution"
-        fx = (self.image_width / 2) / math.tan(self.FoVx / 2)
-        fy = (self.image_height / 2) / math.tan(self.FoVy / 2)
-        cx = self.image_width / 2
-        cy = self.image_height / 2
 
         # Create a grid of pixel coordinates
         u, v = torch.meshgrid(torch.arange(h, device=depth_map.device), torch.arange(w, device=depth_map.device), indexing="ij")
         
         # Compute 3D coordinates
-        X = (u - cx + 0.5) * depth_map / fx
-        Y = (v - cy + 0.5) * depth_map / fy
+        X = (u - self.cx + 0.5) * depth_map / self.fx
+        Y = (v - self.cy + 0.5) * depth_map / self.fy
         Z = depth_map
 
         points_cam = torch.stack((X, Y, Z), axis=-1)
+        return points_cam
+        
+    def depth_map_to_3d(self, depth_map):
+        """
+        Convert a depth map to 3D coordinates using intrinsic camera parameters.
+
+        :param depth_map: 2D array of depth values (H x W)
+        :param intrinsic_matrix: Camera intrinsic matrix
+        :return: 3D coordinates array of shape (H, W, 3)
+        """
+
+        points_cam = self.depth_map_to_cam(depth_map)
         points_world = points_cam @ torch.tensor(self.R.T, device=points_cam.device).float() + self.camera_center
 
         return points_world
