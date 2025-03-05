@@ -141,10 +141,10 @@ class OptimizationParams(ParamGroup):
         self.voxel_max_size = 100
         
         self.loss_mult = 1.0
-        self.ssim_sigma = 0.0
-        self.ssim_sigma_end = -1.0
+        self.ssim_sigma = 100.0
+        self.ssim_sigma_end = 10.0
         self.ssim_window_size = 5
-        self.full_training_step = 0
+        self.full_training_step = 100
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

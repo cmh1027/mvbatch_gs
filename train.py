@@ -49,7 +49,7 @@ def training(dataset, opt, pipe, args):
     if opt.gs_type == "3dgs":
         dataset.init_scale = 1
         predictable_growth_degree = opt.predictable_growth_degree_3dgs
-        # opt.prune_threshold = opt.prune_threshold * opt.batch_size
+        opt.prune_threshold = opt.prune_threshold * opt.batch_size
         opt.densify_until_iter = 15000
     else:
         predictable_growth_degree = opt.predictable_growth_degree_mcmc
